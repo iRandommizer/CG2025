@@ -1,6 +1,7 @@
 #include "TextureMap.h"
 #include <filesystem>
 
+// Default Constructor
 TextureMap::TextureMap() = default;
 TextureMap::TextureMap(const std::string &filename) {
 	std::ifstream inputStream(filename, std::ifstream::binary);
@@ -21,6 +22,7 @@ TextureMap::TextureMap(const std::string &filename) {
 	// Read the max value (which we assume is 255)
 	std::getline(inputStream, nextLine);
 
+	// This is shows that the pixels variable is a 2D turned 1D variable, holding the color informations
 	pixels.resize(width * height);
 	for (size_t i = 0; i < width * height; i++) {
 		int red = inputStream.get();

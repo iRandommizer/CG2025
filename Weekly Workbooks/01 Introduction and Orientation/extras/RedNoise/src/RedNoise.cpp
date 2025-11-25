@@ -1,3 +1,4 @@
+#include <TextureMap.h>
 #include <CanvasTriangle.h>
 #include <CanvasPoint.h>
 #include <Colour.h>
@@ -9,6 +10,8 @@
 
 #define WIDTH 1920
 #define HEIGHT 1080
+
+TextureMap texture("../../../03 Triangles and Textures/texture.ppm");
 
 void draw(DrawingWindow &window) { // I'm assuming these are runnign frame by frame
 	window.clearPixels(); //Is this just for cleanliness? - this is used for showing motion, like in animation, you don't let the previous frame persist
@@ -155,8 +158,8 @@ void drawRainbowBaycentricTriangle(DrawingWindow &window, glm::vec2 v0, glm::vec
 	glm::vec3 v1Color(0,255,0);
 	glm::vec3 v2Color(0,0,255);
 	window.clearPixels();
-	for (size_t y = 0; y < window.height; y++){
-		for ( size_t x = 0; x < window.width; x++){
+	for (int y = 0; y < window.height; y++){
+		for (int x = 0; x < window.width; x++){
 			glm::vec2 curCoor(x,y);
 			glm::vec3 baycentricCoor = convertToBarycentricCoordinates(v0, v1, v2, curCoor);
 			float u = baycentricCoor.x;
@@ -198,7 +201,7 @@ void drawLine(DrawingWindow &window, CanvasPoint from,CanvasPoint to,Colour colo
 	// Add pixel values within each step
 }
 
-// <Drawing Unfilled Triangle>
+// <Drawing Unfilled Triangle> Week 3 Task 3
 // Draws three outer edge lines of a triangle that is passed as paramters
 void drawUnfilledTriangle(DrawingWindow &window, CanvasTriangle triangle, Colour colour){
 	//Input
@@ -255,7 +258,7 @@ void drawFlatBottomTriangle(DrawingWindow &window, CanvasPoint TopPoint, CanvasP
 	}
 } 
 
-// <Drawing Filled Triangle>
+// <Drawing Filled Triangle> Week 3 Task 4
 // Draws 3 whiter edge and fills it up based on the colours we chose
 void drawFilledTriangle(DrawingWindow &window, CanvasTriangle triangle, Colour colour){
 	//3 Core Algorithms
@@ -285,6 +288,52 @@ void drawFilledTriangle(DrawingWindow &window, CanvasTriangle triangle, Colour c
 			drawFlatBottomTriangle(window,c,b,d,colour);
 	}
 	drawUnfilledTriangle(window, triangle, Colour(255,255,255));
+}
+
+// <Mapping Textures> Week 3 Task 5
+// With reference to the PPM file, we create a triangle and properly map PPM data to the output data
+// Reminder: "&" helps us just reference the object itself instead of creature a "copy" of it
+void mapTexture(DrawingWindow &window, CanvasTriangle triangle, TextureMap &texture){
+	// Get the vertices
+	CanvasPoint v0 = triangle.v0();
+	CanvasPoint v1 = triangle.v1();
+	CanvasPoint v2 = triangle.v2();
+
+	// Convert to vec2 so we can use the "convertToBarycentricCoordinates"
+	glm::vec2 vector0(v0.x,v0.y);
+	glm::vec2 vector1(v1.x,v1.y);
+	glm::vec2 vector2(v2.x,v2.y);
+
+	for (int y = 0; y <= window.height; y++){
+		for (int x = 0; x <= window.width; x++){
+			// Get the Barycentric Weights
+			glm::vec2 curCoor(x,y);
+			glm::vec3 weights = convertToBarycentricCoordinates(vector0,vector1,vector2,curCoor);
+			float u = weights.x;
+			float v = weights.y;
+			float w = weights.z;
+			// Since we are working with floats, the numbers migth not be exact and be out of our range and hence needs tolerance
+			float tolerance = 1e-5;
+			// If it's within our triangle:
+			if(u >= 0 && v >= 0 && w >= 0 && u <= 1 && v <= 1 && w <= 1 && std::abs(u+v+w -1) < tolerance){
+				// Formula is like: Proportion * Total Size
+				float texX = w * v0.texturePoint.x + u * v1.texturePoint.x + v * v2.texturePoint.x;
+				float texY = w * v0.texturePoint.y + u * v1.texturePoint.y + v * v2.texturePoint.y;
+				// Since we are dealing with int, we must convert our float values to int
+				int intX = static_cast<int>(texX);
+				int intY = static_cast<int>(texY);
+				// Round down edge values
+				intX = std::max(0,std::min(intX, (int)texture.width - 1));
+				intY = std::max(0,std::min(intY, (int)texture.height - 1));
+
+				// We need to convert our 2D Dimension Variables into 1D Dimension Index of the texture class
+				int idx = (intY * texture.width) + intX;
+				uint32_t colour = texture.pixels[idx];
+
+				window.setPixelColour(x,y,colour);
+			}
+		}
+	}
 }
 
 void handleEvent(SDL_Event event, DrawingWindow &window) {
@@ -341,18 +390,36 @@ int main(int argc, char *argv[]) {
     std::cout << std::endl;
 	
 	DrawingWindow window = DrawingWindow(WIDTH, HEIGHT, false);
-	drawFilledTriangle(window, CanvasTriangle(CanvasPoint(200,200), CanvasPoint(700,700), CanvasPoint(1400,600)), Colour(235,50,123));
+
+	// TASK TESTS START ----------------------------------------------------------------------------------------------------------------->
+	// Week 3 Task 4
+	/*drawFilledTriangle(window, CanvasTriangle(CanvasPoint(200,200), CanvasPoint(700,700), CanvasPoint(1400,600)), Colour(235,50,123));
+	drawFlatBottomTriangle(window, CanvasPoint(500,10), CanvasPoint(50,400), CanvasPoint(1000, 400), Colour(255,255,255));
+	// Week 3 Task 2
 	drawLine(window, CanvasPoint(0,0), CanvasPoint(window.width/2, window.height/2), Colour(255,255,255));
 	drawLine(window, CanvasPoint(window.width/2,0), CanvasPoint(window.width/2, window.height), Colour(255,255,255));
 	drawLine(window, CanvasPoint(window.width-1,0), CanvasPoint(window.width/2, window.height/2), Colour(255,255,255));
 	drawLine(window, CanvasPoint(window.width/3,window.height/2), CanvasPoint(window.width/3*2, window.height/2), Colour(255,255,255));
-	drawUnfilledTriangle(window, CanvasTriangle(CanvasPoint(20,500), CanvasPoint(400,100), CanvasPoint(window.width/1.5f, window.height/1.5f)),Colour(155,100,20));
-	drawFlatBottomTriangle(window, CanvasPoint(500,10), CanvasPoint(50,400), CanvasPoint(1000, 400), Colour(255,255,255));
+	// Weel 3 Task 3
+	drawUnfilledTriangle(window, CanvasTriangle(CanvasPoint(20,500), CanvasPoint(400,100), CanvasPoint(window.width/1.5f, window.height/1.5f)),Colour(155,100,20));	
+	*/
+	// Week 3 Task 5
+	CanvasPoint point1(160,10);
+	point1.texturePoint = TexturePoint(195,5);
+	CanvasPoint point2(300,230);
+	point2.texturePoint = TexturePoint(395,380);
+	CanvasPoint point3(10,150);
+	point3.texturePoint = TexturePoint(65,330);
+	CanvasTriangle sampleTri(point1,point2,point3);
+	mapTexture(window,sampleTri,texture);
+	// Week 2 Task 4
+	//drawRainbowBaycentricTriangle(window, glm::vec2(120,600), glm::vec2(1000,1000), glm::vec2(300,100));
+	// TASK TESTS END ----------------------------------------------------------------------------------------------------------------->
+
 	SDL_Event event;
 	while (true) {
 		// We MUST poll for events - otherwise the window will freeze !
 		if (window.pollForInputEvents(event)) handleEvent(event, window);
-		//drawRainbowBaycentricTriangle(window, glm::vec2(120,600), glm::vec2(1000,1000), glm::vec2(300,100));
 		window.renderFrame();
 		// Need to render the frame at the end, or nothing actually gets shown on the screen !
 	}
