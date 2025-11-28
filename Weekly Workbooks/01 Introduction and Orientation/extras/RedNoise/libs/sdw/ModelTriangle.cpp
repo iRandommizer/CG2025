@@ -3,6 +3,7 @@
 
 ModelTriangle::ModelTriangle() = default;
 
+// Takes in 3 vertices in vec3 and colour object
 ModelTriangle::ModelTriangle(const glm::vec3 &v0, const glm::vec3 &v1, const glm::vec3 &v2, Colour trigColour) :
 		vertices({{v0, v1, v2}}), texturePoints(), colour(std::move(trigColour)), normal() {}
 

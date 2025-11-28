@@ -1,3 +1,4 @@
+#include <ModelTriangle.h>
 #include <TextureMap.h>
 #include <CanvasTriangle.h>
 #include <CanvasPoint.h>
@@ -83,6 +84,22 @@ float interpolateOnEdge(CanvasPoint from, CanvasPoint to, float pairedValue ,int
 		float percentage = (pairedValue - from.x) / xRange;
 		return from.y + percentage * yRange;
 	}
+}
+
+CanvasPoint interpolateOnEdge(CanvasPoint from, CanvasPoint to, float y){
+	float yRange = to.y - from.y;
+	if (yRange ==0) return from; // Just incase we divide by 0
+
+	float percentage = (y - from.y ) / yRange;
+
+	float x = from.x + (to.x - from.x) * percentage;
+	// Interpolate Texture Coordinates
+    float texX = from.texturePoint.x + (to.texturePoint.x - from.texturePoint.x) * percentage;
+    float texY = from.texturePoint.y + (to.texturePoint.y - from.texturePoint.y) * percentage;
+
+    CanvasPoint result(x, y);
+    result.texturePoint = TexturePoint(texX, texY);
+    return result;
 }
 
 // Three Element Numerical Interpolation
@@ -235,6 +252,37 @@ void drawFlatTopTriangle(DrawingWindow &window, CanvasPoint bottomPoint, CanvasP
 	}
 } 
 
+void drawFlatTopTriangle(DrawingWindow &window, CanvasPoint bottomPoint, CanvasPoint v0, CanvasPoint v1, TextureMap texture){
+	// Figure out which is left or right side
+	// If vertex_0 is lesser than vertex_1, left vertex is vertex_0, else vextex_1
+	CanvasPoint left = v0.x < v1.x ? v0 : v1;
+	CanvasPoint right = v0.x < v1.x ? v1 : v0;
+	
+	// Define start and ending y points to intepolate agaisnt
+	int yStart = v0.y;
+	int yEnd = bottomPoint.y;
+
+	// For every y, find the starting and ending x values
+	for (int y = yStart; y <= yEnd; y++){
+		CanvasPoint curLeft = interpolateOnEdge(left,bottomPoint,y);
+		CanvasPoint curRight = interpolateOnEdge(right,bottomPoint,y);
+		float xDiff = curRight.x - curLeft.x;
+		// For every x and y values, let that pixel be assigned colour		
+		for (int x = curLeft.x; x <= curRight.x; x++){
+			float horizontalProgress = (x-curLeft.x)/xDiff;
+			// Formula: Origin + (xdiff or ydiff) * % = current x or y
+			float texX = curLeft.texturePoint.x + (curRight.texturePoint.x - curLeft.texturePoint.x)*horizontalProgress;
+			float texY = curLeft.texturePoint.y + (curRight.texturePoint.y - curLeft.texturePoint.y)*horizontalProgress;
+			// Capping the values of texX or texY, especially when rounding values to an int goes out of bound
+			int intX = std::max(0, std::min((int)texX, (int)texture.width - 1));
+			int intY = std::max(0, std::min((int)texY, (int)texture.height - 1));
+			// This is to get the valid index of the colour we are looking for from the texturemap class
+			int idx = (intY * texture.width) + intX;
+			window.setPixelColour(x,y, texture.pixels[idx]);
+		}
+	}
+} 
+
 void drawFlatBottomTriangle(DrawingWindow &window, CanvasPoint TopPoint, CanvasPoint v0, CanvasPoint v1, Colour colour){
 	//Extra note: TopPoint would mean visual top point which in out case is y value that is the lowest
 	
@@ -246,14 +294,50 @@ void drawFlatBottomTriangle(DrawingWindow &window, CanvasPoint TopPoint, CanvasP
 	CanvasPoint left = v0.x < v1.x ? v0 : v1;
 	CanvasPoint right = v0.x < v1.x ? v1 : v0;
 	
+	// Define start and ending y points to intepolate agaisnt
 	int yStart = TopPoint.y;
 	int yEnd = v0.y;
 
+	// For every y, find the starting and ending x values
 	for (int i = yStart; i <= yEnd; i++){
 		int xLeft = interpolateOnEdge(left,TopPoint,i,0);
 		int xRight = interpolateOnEdge(right,TopPoint,i,0);
+		// For every x and y values, let that pixel be assigned colour
 		for (int j = xLeft; j <= xRight; j++){
 			window.setPixelColour(j,i, packedColour);
+		}
+	}
+} 
+
+void drawFlatBottomTriangle(DrawingWindow &window, CanvasPoint topPoint, CanvasPoint v0, CanvasPoint v1, TextureMap texture){
+	//Extra note: TopPoint would mean visual top point which in out case is y value that is the lowest
+	
+	// Figure out which is left or right side
+	// If vertex_0 is lesser than vertex_1, left vertex is vertex_0, else vextex_1
+	CanvasPoint left = v0.x < v1.x ? v0 : v1;
+	CanvasPoint right = v0.x < v1.x ? v1 : v0;
+	
+	// Define start and ending y points to intepolate agaisnt
+	int yStart = topPoint.y;
+	int yEnd = v0.y;
+
+	// For every y, find the starting and ending x values
+	for (int y = yStart; y <= yEnd; y++){
+		CanvasPoint curLeft = interpolateOnEdge(left,topPoint,y);
+		CanvasPoint curRight = interpolateOnEdge(right,topPoint,y);
+		float xDiff = curRight.x - curLeft.x;
+		// For every x and y values, let that pixel be assigned colour		
+		for (int x = curLeft.x; x <= curRight.x; x++){
+			float horizontalProgress = (x-curLeft.x)/xDiff;
+			// Formula: Origin + (xdiff or ydiff) * % = current x or y
+			float texX = curLeft.texturePoint.x + (curRight.texturePoint.x - curLeft.texturePoint.x)*horizontalProgress;
+			float texY = curLeft.texturePoint.y + (curRight.texturePoint.y - curLeft.texturePoint.y)*horizontalProgress;
+			// Capping the values of texX or texY, especially when rounding values to an int goes out of bound
+			int intX = std::max(0, std::min((int)texX, (int)texture.width - 1));
+			int intY = std::max(0, std::min((int)texY, (int)texture.height - 1));
+			// This is to get the valid index of the colour we are looking for from the texturemap class
+			int idx = (intY * texture.width) + intX;
+			window.setPixelColour(x,y, texture.pixels[idx]);
 		}
 	}
 } 
@@ -278,7 +362,7 @@ void drawFilledTriangle(DrawingWindow &window, CanvasTriangle triangle, Colour c
 		drawFlatBottomTriangle(window, a,b,c, colour);
 	} 
 	else if (a.y == b.y){
-		drawFlatBottomTriangle(window, a,b,c,colour);
+		drawFlatTopTriangle(window, c,a,b,colour);
 	}
 	else{
 		// Split triangle
@@ -335,6 +419,91 @@ void mapTexture(DrawingWindow &window, CanvasTriangle triangle, TextureMap &text
 		}
 	}
 }
+
+// <Mapping Textures> Week 3 Task 5
+// With reference to the PPM file, we create a triangle and properly map PPM data to the output data
+// It is very similar to our drawfilled triangle function, just that we are using a texture map
+void drawFilledTriangle(DrawingWindow &window, CanvasTriangle triangle, TextureMap texture){
+	//3 Core Algorithms
+	//	1) Check if the triangle has a completely horizontal line, if not, split triangle
+	//	2) Rasterise Triangle/Triangles
+	//  3) Draw Outline for the coordinates to check our rasterising process
+	CanvasPoint a = triangle.v0();
+	CanvasPoint b = triangle.v1();
+	CanvasPoint c = triangle.v2();
+	// Sort vertices by decreasing y value, higher y value means, lower visually (went higher visually)
+	if (a.y < b.y) std::swap(a,b);
+	if (a.y < c.y) std::swap(a,c);
+	if (b.y < c.y) std::swap(b,c);
+
+	if (b.y == c.y){
+		drawFlatBottomTriangle(window, a,b,c, texture);
+	} 
+	else if (a.y == b.y){
+		drawFlatTopTriangle(window,c,b,a,texture);
+	}
+	else{
+		// Split triangle
+			CanvasPoint d = interpolateOnEdge(a,c,b.y);
+			d.x = round(d.x);
+			drawFlatBottomTriangle(window,c,b,d,texture);
+			drawFlatTopTriangle(window,a,b,d,texture);		
+	}
+	drawUnfilledTriangle(window, triangle, Colour(255,255,255));
+}
+
+// Week 4 Task 2
+// Input
+//	- .obj file
+// Output 
+std::vector<ModelTriangle> loadObjModel(std::string filename, float scalingFactor){
+	// Setup Contrainers 
+	std::vector<ModelTriangle> triangles;
+	std::vector<glm::vec3> tempVertices;
+
+	// Open the file
+	std::ifstream file(filename); // ifstream stands for -> input file stream
+	std::string line; // Temp variable for reading cur line
+
+	// Read the file line by line
+	while (std::getline(file, line)){
+		std::vector<std::string> tokens = split(line, ' '); // it is basically creating individual values from a line everytime there is a ' ' between characters
+		
+		// if there is a line that is empty, we skip it
+		if (tokens.empty()) continue;
+
+		// We have the vertex processing
+		if (tokens[0] == "v"){
+			// We are to immediately scale the positions (x,y,z) when they are read in
+			// std::stof means: string to float
+			float x = std::stof(tokens[1]) * scalingFactor;
+			float y = std::stof(tokens[2]) * scalingFactor;
+			float z = std::stof(tokens[3]) * scalingFactor;
+
+			tempVertices.push_back(glm::vec3(x,y,z));
+		}
+
+		// Then the Face processing
+		else if (tokens[0] == "f") {
+			// Since obj uses 1 for it's first idx, we need to minus it by 1
+			// std::stoi means: string to int
+			int v1Idx = std::stoi(tokens[1]) - 1;
+			int v2Idx = std::stoi(tokens[2]) - 1;
+			int v3Idx = std::stoi(tokens[3]) - 1;
+			// We then retrieve the actual points using the indices
+			glm::vec3 pt1 = tempVertices[v1Idx];
+			glm::vec3 pt2 = tempVertices[v2Idx];
+			glm::vec3 pt3 = tempVertices[v3Idx];
+
+			// Now having both, we cna create the triangle with the colour inputed
+			ModelTriangle triangle(pt1, pt2, pt3, Colour(255,0,0));
+			triangles.push_back(triangle);
+		}
+	}
+
+	return triangles;
+}
+
 
 void handleEvent(SDL_Event event, DrawingWindow &window) {
 	if (event.type == SDL_KEYDOWN) {
@@ -411,9 +580,14 @@ int main(int argc, char *argv[]) {
 	CanvasPoint point3(10,150);
 	point3.texturePoint = TexturePoint(65,330);
 	CanvasTriangle sampleTri(point1,point2,point3);
-	mapTexture(window,sampleTri,texture);
+	drawFilledTriangle(window,sampleTri,texture);
 	// Week 2 Task 4
 	//drawRainbowBaycentricTriangle(window, glm::vec2(120,600), glm::vec2(1000,1000), glm::vec2(300,100));
+	// Week 4 Task 2
+	std::vector<ModelTriangle> model = loadObjModel("../../../04 Wireframes and Rasterising/models/cornell-box.obj",0.35);
+	for (int i = 0; i < model.size(); i++){
+		std::cout << "Triangle " << i << ": " << model[i] << std::endl;
+	}
 	// TASK TESTS END ----------------------------------------------------------------------------------------------------------------->
 
 	SDL_Event event;
