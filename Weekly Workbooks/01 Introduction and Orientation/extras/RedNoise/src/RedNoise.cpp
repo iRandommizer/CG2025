@@ -9,8 +9,8 @@
 #include <vector>
 #include <glm/glm.hpp>
 
-#define WIDTH 1920
-#define HEIGHT 1080
+#define WIDTH 640
+#define HEIGHT 640
 
 TextureMap texture("../../../03 Triangles and Textures/texture.ppm");
 
@@ -80,9 +80,14 @@ float interpolateOnEdge(CanvasPoint from, CanvasPoint to, float pairedValue ,int
 		return from.x + percentage * xRange;
 	}
 	// If we are looking for y value
-	else{
+	else if (chosenDimension == 1){
 		float percentage = (pairedValue - from.x) / xRange;
 		return from.y + percentage * yRange;
+	}
+	else if (chosenDimension == 2){
+		if (yRange == 0) return from.depth; // just in case
+		float percentage = (pairedValue - from.y) / yRange;
+		return from.depth + percentage * (to.depth - from.depth);
 	}
 }
 
@@ -231,7 +236,7 @@ void drawUnfilledTriangle(DrawingWindow &window, CanvasTriangle triangle, Colour
 	drawLine(window, triangle.v2(), triangle.v0(), colour);
 }
 
-void drawFlatTopTriangle(DrawingWindow &window, CanvasPoint bottomPoint, CanvasPoint v0, CanvasPoint v1, Colour colour){
+void drawFlatTopTriangle(DrawingWindow &window, CanvasPoint bottomPoint, CanvasPoint v0, CanvasPoint v1, Colour colour, std::vector<std::vector<float>> &depthBuffer){
 	// Set Up Colour
 	uint32_t packedColour = (255 << 24) + (colour.red << 16) + (colour.green << 8) + colour.blue;
 	
@@ -243,11 +248,36 @@ void drawFlatTopTriangle(DrawingWindow &window, CanvasPoint bottomPoint, CanvasP
 	int yStart = v0.y;
 	int yEnd = bottomPoint.y;
 
-	for (int i = yStart; i <= yEnd; i++){
-		int xLeft = interpolateOnEdge(left,bottomPoint,i,0);
-		int xRight = interpolateOnEdge(right,bottomPoint,i,0);
-		for (int j = xLeft; j <= xRight; j++){
-			window.setPixelColour(j,i, packedColour);
+	for (int y = yStart; y <= yEnd; y++){
+		float xLeft = interpolateOnEdge(left,bottomPoint,y,0);
+		float xRight = interpolateOnEdge(right,bottomPoint,y,0);
+
+		// Interpolate depth at the start and end of the row
+		float depthLeft = interpolateOnEdge(left, bottomPoint, y, 2);
+		float depthRigth = interpolateOnEdge(right, bottomPoint, y, 2);
+
+		int intXLeft = std::round(xLeft);
+		int intXRight = std::round(xRight);
+
+		if (intXLeft > intXRight) {
+			std::swap(intXLeft, intXRight);
+			std::swap(depthLeft, depthRigth); // Important for correct depth interpolation!
+		}
+
+		for (int x = intXLeft; x <= intXRight; x++){
+			float xRange = xRight - xLeft;
+			float depthRange = depthRigth - depthLeft;
+
+			float ratio = (xRange != 0) ? (float)(x - xLeft) / xRange : 0.0f;
+			float pixleDepth = depthLeft + (ratio * depthRange);
+
+			// Okay now we need to check the z-buffer
+			if (x >= 0 && x < window.width && y >= 0 && y < window.height){
+				if (pixleDepth > depthBuffer[x][y]){
+					depthBuffer[x][y] = pixleDepth; //to update the depthbuffer per pixel
+					window.setPixelColour(x,y, packedColour);
+				}
+			}
 		}
 	}
 } 
@@ -283,31 +313,51 @@ void drawFlatTopTriangle(DrawingWindow &window, CanvasPoint bottomPoint, CanvasP
 	}
 } 
 
-void drawFlatBottomTriangle(DrawingWindow &window, CanvasPoint TopPoint, CanvasPoint v0, CanvasPoint v1, Colour colour){
-	//Extra note: TopPoint would mean visual top point which in out case is y value that is the lowest
-	
-	// Set Up Colour
-	uint32_t packedColour = (255 << 24) + (colour.red << 16) + (colour.green << 8) + colour.blue;
-	
-	// Figure out which is left or right side
-	// If vertex_0 is lesser than vertex_1, left vertex is vertex_0, else vextex_1
-	CanvasPoint left = v0.x < v1.x ? v0 : v1;
-	CanvasPoint right = v0.x < v1.x ? v1 : v0;
-	
-	// Define start and ending y points to intepolate agaisnt
-	int yStart = TopPoint.y;
-	int yEnd = v0.y;
+void drawFlatBottomTriangle(DrawingWindow &window, CanvasPoint topPoint, CanvasPoint v0, CanvasPoint v1, Colour colour, std::vector<std::vector<float>> &depthBuffer){
+    uint32_t packedColour = (255 << 24) + (colour.red << 16) + (colour.green << 8) + colour.blue;
+    
+    CanvasPoint left = v0.x < v1.x ? v0 : v1;
+    CanvasPoint right = v0.x < v1.x ? v1 : v0;
+    
+    int yStart = topPoint.y;
+    int yEnd = v0.y;
 
-	// For every y, find the starting and ending x values
-	for (int i = yStart; i <= yEnd; i++){
-		int xLeft = interpolateOnEdge(left,TopPoint,i,0);
-		int xRight = interpolateOnEdge(right,TopPoint,i,0);
-		// For every x and y values, let that pixel be assigned colour
-		for (int j = xLeft; j <= xRight; j++){
-			window.setPixelColour(j,i, packedColour);
+	// At every row
+    for (int y = yStart; y <= yEnd; y++){
+        // Get the left and right edges
+        float xLeft = interpolateOnEdge(left, topPoint, y, 0);
+        float xRight = interpolateOnEdge(right, topPoint, y, 0);
+
+        // get the depth by interpolaiting according to y value
+        float depthLeft = interpolateOnEdge(left, topPoint, y, 2);
+        float depthRight = interpolateOnEdge(right, topPoint, y, 2);
+
+        int intXLeft = std::round(xLeft);
+        int intXRight = std::round(xRight);
+
+		if (intXLeft > intXRight) {
+			std::swap(intXLeft, intXRight);
+			std::swap(depthLeft, depthRight); // Important for correct depth interpolation!
 		}
-	}
-} 
+
+        for (int x = intXLeft; x <= intXRight; x++){
+            // now within the same row, we need to interpolate the depth but accoridng to x
+            float xRange = xRight - xLeft;
+            float depthRange = depthRight - depthLeft;
+            float ratio = (xRange != 0) ? (float)(x - xLeft) / xRange : 0.0f;
+            float pixelDepth = depthLeft + (ratio * depthRange);
+
+            //  Z-Buffer Check
+            if (x >= 0 && x < window.width && y >= 0 && y < window.height){
+                if (pixelDepth > depthBuffer[x][y]) {
+                    depthBuffer[x][y] = pixelDepth;
+                    window.setPixelColour(x, y, packedColour);
+                }
+            }
+        }
+    }
+}
+
 
 void drawFlatBottomTriangle(DrawingWindow &window, CanvasPoint topPoint, CanvasPoint v0, CanvasPoint v1, TextureMap texture){
 	//Extra note: TopPoint would mean visual top point which in out case is y value that is the lowest
@@ -344,7 +394,7 @@ void drawFlatBottomTriangle(DrawingWindow &window, CanvasPoint topPoint, CanvasP
 
 // <Drawing Filled Triangle> Week 3 Task 4
 // Draws 3 whiter edge and fills it up based on the colours we chose
-void drawFilledTriangle(DrawingWindow &window, CanvasTriangle triangle, Colour colour){
+void drawFilledTriangle(DrawingWindow &window, CanvasTriangle triangle, Colour colour, std::vector<std::vector<float>> &depthBuffer){
 	//3 Core Algorithms
 	//	1) Check if the triangle has a completely horizontal line, if not, split triangle
 	//	2) Rasterise Triangle/Triangles
@@ -359,19 +409,22 @@ void drawFilledTriangle(DrawingWindow &window, CanvasTriangle triangle, Colour c
 	if (b.y < c.y) std::swap(b,c);
 
 	if (b.y == c.y){
-		drawFlatBottomTriangle(window, a,b,c, colour);
+		drawFlatBottomTriangle(window, a,b,c, colour,depthBuffer);
 	} 
 	else if (a.y == b.y){
-		drawFlatTopTriangle(window, c,a,b,colour);
+		drawFlatTopTriangle(window, c,b,a,colour,depthBuffer);
 	}
 	else{
 		// Split triangle
 			float newXCoodinate = interpolateOnEdge(a, c, b.y, 0);
-			CanvasPoint d(newXCoodinate,b.y);
-			drawFlatTopTriangle(window,a,b,d,colour);
-			drawFlatBottomTriangle(window,c,b,d,colour);
+			// Interpolate Depth
+			float newDepth = interpolateOnEdge(a,c,b.y,2);
+			CanvasPoint d(newXCoodinate,b.y, newDepth);
+			drawFlatBottomTriangle(window,c,b,d,colour, depthBuffer);
+			drawFlatTopTriangle(window,a,b,d,colour,depthBuffer);
 	}
-	drawUnfilledTriangle(window, triangle, Colour(255,255,255));
+	// Not Needed afterwards
+	//drawUnfilledTriangle(window, triangle, Colour(255,255,255));
 }
 
 // <Mapping Textures> Week 3 Task 5
@@ -452,11 +505,9 @@ void drawFilledTriangle(DrawingWindow &window, CanvasTriangle triangle, TextureM
 	drawUnfilledTriangle(window, triangle, Colour(255,255,255));
 }
 
-// Week 4 Task 2
-// Input
-//	- .obj file
-// Output 
-std::vector<ModelTriangle> loadObjModel(std::string filename, float scalingFactor){
+// Week 4 Task 2 
+// How to read and process .obj objects, specifically to turn it into a dynamic array of model triangles
+std::vector<ModelTriangle> loadObjModel(std::string filename, float scalingFactor, std::vector<Colour> palette){
 	// Setup Contrainers 
 	std::vector<ModelTriangle> triangles;
 	std::vector<glm::vec3> tempVertices;
@@ -465,15 +516,33 @@ std::vector<ModelTriangle> loadObjModel(std::string filename, float scalingFacto
 	std::ifstream file(filename); // ifstream stands for -> input file stream
 	std::string line; // Temp variable for reading cur line
 
+	// Added on from Wk 4 Task 3
+	// Lets give a defualt colour, just in case, no colour was given
+	Colour currentColour = Colour(255,255,255);
+
 	// Read the file line by line
-	while (std::getline(file, line)){
+	while (std::getline(file, line)){ // try to grab the next line from "file", if you manage to , run the loop
 		std::vector<std::string> tokens = split(line, ' '); // it is basically creating individual values from a line everytime there is a ' ' between characters
 		
 		// if there is a line that is empty, we skip it
 		if (tokens.empty()) continue;
 
+		// Added on from Wk 4 Task 3
+		if (tokens[0] == "usemtl"){
+			std::string neededColour = tokens[1];
+
+			// Lets look through our palette for the colour
+			bool found = false;
+			for (size_t i = 0; i < palette.size(); i++){
+				if(palette[i].name == neededColour){
+					currentColour = palette[i];
+					found = true;
+					break;
+				} 
+			}
+		}
 		// We have the vertex processing
-		if (tokens[0] == "v"){
+		else if (tokens[0] == "v"){
 			// We are to immediately scale the positions (x,y,z) when they are read in
 			// std::stof means: string to float
 			float x = std::stof(tokens[1]) * scalingFactor;
@@ -494,15 +563,144 @@ std::vector<ModelTriangle> loadObjModel(std::string filename, float scalingFacto
 			glm::vec3 pt1 = tempVertices[v1Idx];
 			glm::vec3 pt2 = tempVertices[v2Idx];
 			glm::vec3 pt3 = tempVertices[v3Idx];
-
+			
 			// Now having both, we cna create the triangle with the colour inputed
-			ModelTriangle triangle(pt1, pt2, pt3, Colour(255,0,0));
+			ModelTriangle triangle(pt1, pt2, pt3, currentColour);
 			triangles.push_back(triangle);
 		}
 	}
 
 	return triangles;
 }
+
+// Week 4 Task 3
+// Function to read .mtl files and extract "colour" data from it to make a palette
+std::vector<Colour> loadMaterials(std::string filename) {
+	// Used to store our colours
+	std::vector<Colour> palette;
+
+	std::ifstream file(filename);
+	std::string line; // store the line of information
+	std::string currentName;
+
+	// format of .mtl:
+	// "newmtl White 
+	//	Kd 1.000000 1.000000 1.000000"
+	// We have to tokenize as well
+	while(std::getline(file,line)){
+		std::vector<std::string> tokens = split(line, ' ');
+		if (tokens.empty()) continue;
+
+		// Extract the names
+		if (tokens[0] == "newmtl"){
+			currentName = tokens[1];
+		}
+
+		// extract the rgb values
+		else if (tokens[0] == "Kd"){
+			int r = (int)(std::stof(tokens[1]) * 255);
+			int g = (int)(std::stof(tokens[2]) * 255);
+			int b = (int)(std::stof(tokens[3]) * 255);
+
+			Colour c(currentName, r,g,b);
+			palette.push_back(c);
+		}
+	}
+	return palette;
+}
+
+// Week 4 Task 4 & 5 & eventually 6
+// Projection function where from the points in 3D space, we calculate where it should land in a 2D screenQ
+// Input:
+// - vertex positions
+// - focal length
+// Output:
+// - calculated 2D pixel coordinates
+CanvasPoint projectVertOnCanvasPoint(glm::vec3 cameraPos, glm::vec3 vertPos, float focalLength, float imageScale, DrawingWindow &window){
+	// Calculate the relative position
+	float x = vertPos.x - cameraPos.x;
+	float y = vertPos.y - cameraPos.y;
+	float z = vertPos.z - cameraPos.z; // Positive z is going towards you, negative z is away from you
+	// apply the perspective projection
+	// formula: u = -f * (x/z) + (W/2)
+	// formula: v = f * (y/z) + (H/2)
+	float u = -(focalLength * (x/z)) * imageScale + (window.width/2.0f);
+	float v = (focalLength * (y/z)) * imageScale + (window.height/2.0f);
+	
+	float distance = -z;
+	float inverseDepth = (distance > 0) ? (1.0f/distance) : 0.0f;
+	return CanvasPoint(u,v, inverseDepth);
+}
+
+// Week 4 Task 6
+void drawPointCloud(std::vector<ModelTriangle> model, glm::vec3 cameraPos, float focalLength, float imageScale, DrawingWindow &window){
+	// loop through all triangles
+	for (size_t i = 0; i < model.size(); i++){
+		ModelTriangle triangle = model[i];
+		// for each triangles' vert
+		for (size_t j = 0; j < 3; j++){
+			glm::vec3 vertex = triangle.vertices[j];
+			// we project the 3d vert to 2d screen
+			CanvasPoint screenPos = projectVertOnCanvasPoint(cameraPos, vertex, focalLength, imageScale, window);
+
+			// draw the white pixel at right location
+			uint32_t white = (255 << 24) + (255 << 16) + (255 << 8) + 255;
+			window.setPixelColour(screenPos.x, screenPos.y, white);
+		}
+	}
+}
+
+// Lets make a helper function for task 7 and 8 since this is a common step for the 2
+CanvasTriangle project3DTriangle(ModelTriangle currentTri, glm::vec3 cameraPos, float focalLength, float imageScale, DrawingWindow &window){
+	// Convert from 3d vert to 2d points for each point of the triangle
+	CanvasPoint pt0 = projectVertOnCanvasPoint(cameraPos, currentTri.vertices[0], focalLength, imageScale, window);
+	CanvasPoint pt1 = projectVertOnCanvasPoint(cameraPos, currentTri.vertices[1], focalLength, imageScale, window);
+	CanvasPoint pt2 = projectVertOnCanvasPoint(cameraPos, currentTri.vertices[2], focalLength, imageScale, window);
+	return CanvasTriangle(pt0,pt1,pt2);
+}
+
+// Week 4 Task 7
+// We are now going to try to connect the dots by using the triangles data and out past drawUnfilledTriangle function
+void drawWireframe(std::vector<ModelTriangle> model, glm::vec3 cameraPos, float focalLength, float imageScale, DrawingWindow &window){
+	for (size_t i = 0; i < model.size(); i++){
+		ModelTriangle curTri = model[i];
+
+		// Create the 2D triangle
+		// Apparenlty we cannot have numbers as the start of the variable name
+		CanvasTriangle tri2D = project3DTriangle(curTri, cameraPos, focalLength, imageScale, window);
+		drawUnfilledTriangle(window, tri2D, Colour(255,255,255));
+	}
+}
+
+// Week 4 Task 8
+// very simialr to task 6 and 8 but now we will just add the colour from the pallette and also use our drawFilledTriangle Function
+void drawRasterisedView(std::vector<ModelTriangle> model, glm::vec3 cameraPos, float focalLength, float imageScale, DrawingWindow &window){
+	std::vector<std::vector<float>> depthBuffer(window.width, std::vector<float>(window.height, 0.0f));
+	
+	for (size_t i = 0; i < model.size(); i++){
+		ModelTriangle curTri = model[i];
+
+		CanvasTriangle tri2D = project3DTriangle(curTri, cameraPos, focalLength, imageScale, window);
+		Colour triColour = curTri.colour;
+		drawFilledTriangle(window, tri2D, triColour, depthBuffer);
+		if (curTri.colour.name == "Green") { // Or check RGB values
+			std::cout << "Green Triangle Z values: " 
+					<< curTri.vertices[0].z << ", "
+					<< curTri.vertices[1].z << ", "
+					<< curTri.vertices[2].z << std::endl;
+		}
+		if (curTri.colour.name == "Green") {
+			std::cout << "Green 2D Points:" << std::endl;
+			std::cout << "  P0: (" << tri2D.v0().x << ", " << tri2D.v0().y << ")" << std::endl;
+			std::cout << "  P1: (" << tri2D.v1().x << ", " << tri2D.v1().y << ")" << std::endl;
+			std::cout << "  P2: (" << tri2D.v2().x << ", " << tri2D.v2().y << ")" << std::endl;
+		}
+	}
+}
+
+// Week 4 Task 9
+// Let's fix the render based on taking the z-depth in mind
+// We need to update some of our older functions to fully integarte this idea
 
 
 void handleEvent(SDL_Event event, DrawingWindow &window) {
@@ -537,7 +735,7 @@ void handleEvent(SDL_Event event, DrawingWindow &window) {
             // Create random colors
             Colour col(rand() % 256, rand() % 256, rand() % 256);
 			
-            drawFilledTriangle(window, tri, col);
+            //drawFilledTriangle(window, tri, col,);
         }
 	} else if (event.type == SDL_MOUSEBUTTONDOWN) {
 		window.savePPM("output.ppm");
@@ -573,6 +771,7 @@ int main(int argc, char *argv[]) {
 	drawUnfilledTriangle(window, CanvasTriangle(CanvasPoint(20,500), CanvasPoint(400,100), CanvasPoint(window.width/1.5f, window.height/1.5f)),Colour(155,100,20));	
 	*/
 	// Week 3 Task 5
+	/*
 	CanvasPoint point1(160,10);
 	point1.texturePoint = TexturePoint(195,5);
 	CanvasPoint point2(300,230);
@@ -581,13 +780,39 @@ int main(int argc, char *argv[]) {
 	point3.texturePoint = TexturePoint(65,330);
 	CanvasTriangle sampleTri(point1,point2,point3);
 	drawFilledTriangle(window,sampleTri,texture);
+	*/
 	// Week 2 Task 4
 	//drawRainbowBaycentricTriangle(window, glm::vec2(120,600), glm::vec2(1000,1000), glm::vec2(300,100));
 	// Week 4 Task 2
+	/*
 	std::vector<ModelTriangle> model = loadObjModel("../../../04 Wireframes and Rasterising/models/cornell-box.obj",0.35);
 	for (int i = 0; i < model.size(); i++){
 		std::cout << "Triangle " << i << ": " << model[i] << std::endl;
+	*/
+	// Week 4 Task 3
+	/*std::vector<Colour> palette = loadMaterials("../../../04 Wireframes and Rasterising/models/cornell-box.mtl");
+	for (size_t i = 0; i < palette.size(); i++){
+		std::cout << "Color " << i << ": " << palette[i].name << " (" << palette[i].red << ", " << palette[i].green << ", " << palette[i].blue << ")" << std::endl;
 	}
+	*/
+	// Week 4 Task 4 & 5 Test (obselete, function was updated)
+	/*
+	glm::vec3 testVert(1.0,1.0,0.0);
+	float focalLength = 2.0;
+
+	CanvasPoint projectedPoints = projectVertOnCanvasPoint(testVert, focalLength, window);
+	std::cout << "U : " << projectedPoints.x << std::endl;
+	std::cout << "V : " << projectedPoints.y << std::endl;
+	*/
+	// Week 4 Task 6 & 7 & 8 Test
+	std::vector<Colour> palette = loadMaterials("../../../04 Wireframes and Rasterising/models/cornell-box.mtl");
+	std::vector<ModelTriangle> model = loadObjModel("../../../04 Wireframes and Rasterising/models/cornell-box.obj",0.35, palette);
+	glm::vec3 cameraPos(0.0,0.5,4.0);
+	float focalLength = 2.0f;
+	float imageScale = 150;
+	//drawPointCloud(model, cameraPos, focalLength, imageScale, window);
+	//drawWireframe(model, cameraPos, focalLength, imageScale, window);
+	drawRasterisedView(model, cameraPos, focalLength,imageScale, window);
 	// TASK TESTS END ----------------------------------------------------------------------------------------------------------------->
 
 	SDL_Event event;
