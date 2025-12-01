@@ -8,28 +8,33 @@
 #include <fstream>
 #include <vector>
 #include <glm/glm.hpp>
+#include <map>
 
 #define WIDTH 640
-#define HEIGHT 640
+#define HEIGHT 480
 
 TextureMap texture("../../../03 Triangles and Textures/texture.ppm");
+// GLOBAL CAMERA VARIABLES
+glm::vec3 cameraPos(0.0f, 0.0f, 4.0f);
+// This one is bit more confusing:
+// for reference -> Col 0 = right vector, Col 1 = up vector, Col 2 = forward vector
+glm::mat3 cameraOrientation(
+	1.0f, 0.0f, 0.0f,
+	0.0f, 1.0f, 0.0f,
+	0.0f, 0.0f, 1.0f
+);
+float focalLength = 2.0f;
+float imageScale = 160.0f;
+std::vector<Colour> palette;
+std::vector<ModelTriangle> model;
+// - Camera Control Parameter
+float translationStep = 0.1f;
+float rotationAngle = 0.05f;
+bool orbitEnabled = false;
+float orbitSpeed = 0.0018f; // this is in radians
+glm::vec3 lookAtTarget(0.0f, 0.0f,0.0f); // a variable to allow us to have a target position to look at
 
-void draw(DrawingWindow &window) { // I'm assuming these are runnign frame by frame
-	window.clearPixels(); //Is this just for cleanliness? - this is used for showing motion, like in animation, you don't let the previous frame persist
-	for (size_t y = 0; y < window.height; y++) { // go through every pixel in the y axis
-		for (size_t x = 0; x < window.width; x++) { // go through every pixel in the x axis 
-			float red = rand() % 256; //?? What does the rand() function do? What does the % do? -> This gives us a random value which is confined within the range of 0 and 256
-			float green = static_cast<int>(random() - red) % 256;
-			float blue = 0.0;
-			uint32_t colour = (255 << 24) + (int(red) << 16) + (int(green) << 8) + int(blue); 
-			//   255 << 24        -> places the alpha channel at the highest 8 bits (fully opaque?)
-			//   int(red) << 16   -> places the red value in the next 8 bits 
-			//   int(green) << 16 -> places the green value in the next 8 bits
-			//   int(blue) << 16  -> places the blue in the last 8 bits
-			window.setPixelColour(x, y, colour);
-		}
-	}
-}
+
 /// SUMMARY
 /// Where is the size_t coming from? It was never established
 /// What is unit32_t? why is this t notation with some of these variables? Is it correct to call them variables?
@@ -89,6 +94,7 @@ float interpolateOnEdge(CanvasPoint from, CanvasPoint to, float pairedValue ,int
 		float percentage = (pairedValue - from.y) / yRange;
 		return from.depth + percentage * (to.depth - from.depth);
 	}
+	return 0.0f;
 }
 
 CanvasPoint interpolateOnEdge(CanvasPoint from, CanvasPoint to, float y){
@@ -197,7 +203,7 @@ void drawRainbowBaycentricTriangle(DrawingWindow &window, glm::vec2 v0, glm::vec
 	}
 }
 
-// -------------------------------------
+// ------------------------------------- WEEK 3
 // < Line Drawing >
 // WHats the function type? 
 void drawLine(DrawingWindow &window, CanvasPoint from,CanvasPoint to,Colour colour){
@@ -236,51 +242,41 @@ void drawUnfilledTriangle(DrawingWindow &window, CanvasTriangle triangle, Colour
 	drawLine(window, triangle.v2(), triangle.v0(), colour);
 }
 
-void drawFlatTopTriangle(DrawingWindow &window, CanvasPoint bottomPoint, CanvasPoint v0, CanvasPoint v1, Colour colour, std::vector<std::vector<float>> &depthBuffer){
-	// Set Up Colour
-	uint32_t packedColour = (255 << 24) + (colour.red << 16) + (colour.green << 8) + colour.blue;
-	
-	// Figure out which is left or right side
-	// If vertex_0 is lesser than vertex_1, left vertex is vertex_0, else vextex_1
-	CanvasPoint left = v0.x < v1.x ? v0 : v1;
-	CanvasPoint right = v0.x < v1.x ? v1 : v0;
-	
-	int yStart = v0.y;
-	int yEnd = bottomPoint.y;
 
-	for (int y = yStart; y <= yEnd; y++){
-		float xLeft = interpolateOnEdge(left,bottomPoint,y,0);
-		float xRight = interpolateOnEdge(right,bottomPoint,y,0);
+// Helper function for the drawFilledTriangle
+void drawFlatTopTriangle(DrawingWindow &window, CanvasPoint topLeft, CanvasPoint topRight, CanvasPoint bottom, Colour colour, std::vector<std::vector<float>> &depthBuffer){
+    uint32_t packedColour = (255 << 24) + (colour.red << 16) + (colour.green << 8) + colour.blue;
+    
+    // Ensure topLeft is actually on the left
+    if (topLeft.x > topRight.x) std::swap(topLeft, topRight);
+    
+    int yStart = std::round(topLeft.y);  // Both top points have same Y
+    int yEnd = std::round(bottom.y);
+    
+    for (int y = yStart; y <= yEnd; y++) {
+        // Interpolate along both edges from top corners to bottom
+        float xLeft = interpolateOnEdge(topLeft, bottom, y, 0);
+        float xRight = interpolateOnEdge(topRight, bottom, y, 0);
+        float depthLeft = interpolateOnEdge(topLeft, bottom, y, 2);
+        float depthRight = interpolateOnEdge(topRight, bottom, y, 2);
+        
+        int xStartInt = std::round(xLeft);
+        int xEndInt = std::round(xRight);
+        
+        for (int x = xStartInt; x <= xEndInt; x++) {
+            if (x >= 0 && x < window.width && y >= 0 && y < window.height) {
+                float t = (xEndInt - xStartInt) > 0 ? (float)(x - xStartInt) / (xEndInt - xStartInt) : 0.0f;
+                float pixelDepth = depthLeft + t * (depthRight - depthLeft);
+                
+                if (pixelDepth > depthBuffer[x][y]) {
+                    depthBuffer[x][y] = pixelDepth;
+                    window.setPixelColour(x, y, packedColour);
+                }
+            }
+        }
+    }
+}
 
-		// Interpolate depth at the start and end of the row
-		float depthLeft = interpolateOnEdge(left, bottomPoint, y, 2);
-		float depthRigth = interpolateOnEdge(right, bottomPoint, y, 2);
-
-		int intXLeft = std::round(xLeft);
-		int intXRight = std::round(xRight);
-
-		if (intXLeft > intXRight) {
-			std::swap(intXLeft, intXRight);
-			std::swap(depthLeft, depthRigth); // Important for correct depth interpolation!
-		}
-
-		for (int x = intXLeft; x <= intXRight; x++){
-			float xRange = xRight - xLeft;
-			float depthRange = depthRigth - depthLeft;
-
-			float ratio = (xRange != 0) ? (float)(x - xLeft) / xRange : 0.0f;
-			float pixleDepth = depthLeft + (ratio * depthRange);
-
-			// Okay now we need to check the z-buffer
-			if (x >= 0 && x < window.width && y >= 0 && y < window.height){
-				if (pixleDepth > depthBuffer[x][y]){
-					depthBuffer[x][y] = pixleDepth; //to update the depthbuffer per pixel
-					window.setPixelColour(x,y, packedColour);
-				}
-			}
-		}
-	}
-} 
 
 void drawFlatTopTriangle(DrawingWindow &window, CanvasPoint bottomPoint, CanvasPoint v0, CanvasPoint v1, TextureMap texture){
 	// Figure out which is left or right side
@@ -289,11 +285,11 @@ void drawFlatTopTriangle(DrawingWindow &window, CanvasPoint bottomPoint, CanvasP
 	CanvasPoint right = v0.x < v1.x ? v1 : v0;
 	
 	// Define start and ending y points to intepolate agaisnt
-	int yStart = v0.y;
-	int yEnd = bottomPoint.y;
+	int yStart = bottomPoint.y;
+	int yEnd = v0.y;
 
 	// For every y, find the starting and ending x values
-	for (int y = yStart; y <= yEnd; y++){
+	for (int y = yStart; y <= yEnd; y--){
 		CanvasPoint curLeft = interpolateOnEdge(left,bottomPoint,y);
 		CanvasPoint curRight = interpolateOnEdge(right,bottomPoint,y);
 		float xDiff = curRight.x - curLeft.x;
@@ -313,42 +309,38 @@ void drawFlatTopTriangle(DrawingWindow &window, CanvasPoint bottomPoint, CanvasP
 	}
 } 
 
-void drawFlatBottomTriangle(DrawingWindow &window, CanvasPoint topPoint, CanvasPoint v0, CanvasPoint v1, Colour colour, std::vector<std::vector<float>> &depthBuffer){
-    uint32_t packedColour = (255 << 24) + (colour.red << 16) + (colour.green << 8) + colour.blue;
+// Helper function for the drawFilledTriangle
+void drawFlatBottomTriangle(DrawingWindow &window, CanvasPoint top, CanvasPoint bottomLeft, CanvasPoint bottomRight, Colour colour, std::vector<std::vector<float>> &depthBuffer){
+    // instantiate the colour
+	uint32_t packedColour = (255 << 24) + (colour.red << 16) + (colour.green << 8) + colour.blue;
     
-    CanvasPoint left = v0.x < v1.x ? v0 : v1;
-    CanvasPoint right = v0.x < v1.x ? v1 : v0;
+    // Just double check bottomLeft is actually on the left
+    if (bottomLeft.x > bottomRight.x) std::swap(bottomLeft, bottomRight);
     
-    int yStart = topPoint.y;
-    int yEnd = v0.y;
-
-	// At every row
-    for (int y = yStart; y <= yEnd; y++){
-        // Get the left and right edges
-        float xLeft = interpolateOnEdge(left, topPoint, y, 0);
-        float xRight = interpolateOnEdge(right, topPoint, y, 0);
-
-        // get the depth by interpolaiting according to y value
-        float depthLeft = interpolateOnEdge(left, topPoint, y, 2);
-        float depthRight = interpolateOnEdge(right, topPoint, y, 2);
-
-        int intXLeft = std::round(xLeft);
-        int intXRight = std::round(xRight);
-
-		if (intXLeft > intXRight) {
-			std::swap(intXLeft, intXRight);
-			std::swap(depthLeft, depthRight); // Important for correct depth interpolation!
-		}
-
-        for (int x = intXLeft; x <= intXRight; x++){
-            // now within the same row, we need to interpolate the depth but accoridng to x
-            float xRange = xRight - xLeft;
-            float depthRange = depthRight - depthLeft;
-            float ratio = (xRange != 0) ? (float)(x - xLeft) / xRange : 0.0f;
-            float pixelDepth = depthLeft + (ratio * depthRange);
-
-            //  Z-Buffer Check
-            if (x >= 0 && x < window.width && y >= 0 && y < window.height){
+    int yStart = std::round(top.y);
+    int yEnd = std::round(bottomLeft.y);  // Both bottom points have same Y
+    
+	// For every row
+    for (int y = yStart; y <= yEnd; y++) {
+        // Interpolate along both edges from top to bottom corners
+        float xLeft = interpolateOnEdge(top, bottomLeft, y, 0);
+        float xRight = interpolateOnEdge(top, bottomRight, y, 0);
+        float depthLeft = interpolateOnEdge(top, bottomLeft, y, 2);
+        float depthRight = interpolateOnEdge(top, bottomRight, y, 2);
+        
+		// Since it's still by pixel coordinates, we need to convert to int
+        int xStartInt = std::round(xLeft);
+        int xEndInt = std::round(xRight);
+        
+		// For every col in current row
+        for (int x = xStartInt; x <= xEndInt; x++) {
+			// check if the x and y value are within bounds
+            if (x >= 0 && x < window.width && y >= 0 && y < window.height) {
+				// Find the ratio of progress in the x axis and then apply the same ratio to find the depth
+                float t = (xEndInt - xStartInt) > 0 ? (float)(x - xStartInt) / (xEndInt - xStartInt) : 0.0f;
+                float pixelDepth = depthLeft + t * (depthRight - depthLeft);
+                
+				// Most crucial part of occlusion, only draw the pixel if it's more infront than what already is in it
                 if (pixelDepth > depthBuffer[x][y]) {
                     depthBuffer[x][y] = pixelDepth;
                     window.setPixelColour(x, y, packedColour);
@@ -395,36 +387,37 @@ void drawFlatBottomTriangle(DrawingWindow &window, CanvasPoint topPoint, CanvasP
 // <Drawing Filled Triangle> Week 3 Task 4
 // Draws 3 whiter edge and fills it up based on the colours we chose
 void drawFilledTriangle(DrawingWindow &window, CanvasTriangle triangle, Colour colour, std::vector<std::vector<float>> &depthBuffer){
-	//3 Core Algorithms
-	//	1) Check if the triangle has a completely horizontal line, if not, split triangle
-	//	2) Rasterise Triangle/Triangles
-	//  3) Draw Outline for the coordinates to check our rasterising process
-
-	CanvasPoint a = triangle.v0();
-	CanvasPoint b = triangle.v1();
-	CanvasPoint c = triangle.v2();
-	// Sort vertices by decreasing y value, higher y value means, lower visually (went higher visually)
-	if (a.y < b.y) std::swap(a,b);
-	if (a.y < c.y) std::swap(a,c);
-	if (b.y < c.y) std::swap(b,c);
-
-	if (b.y == c.y){
-		drawFlatBottomTriangle(window, a,b,c, colour,depthBuffer);
-	} 
-	else if (a.y == b.y){
-		drawFlatTopTriangle(window, c,b,a,colour,depthBuffer);
-	}
-	else{
-		// Split triangle
-			float newXCoodinate = interpolateOnEdge(a, c, b.y, 0);
-			// Interpolate Depth
-			float newDepth = interpolateOnEdge(a,c,b.y,2);
-			CanvasPoint d(newXCoodinate,b.y, newDepth);
-			drawFlatBottomTriangle(window,c,b,d,colour, depthBuffer);
-			drawFlatTopTriangle(window,a,b,d,colour,depthBuffer);
-	}
-	// Not Needed afterwards
-	//drawUnfilledTriangle(window, triangle, Colour(255,255,255));
+    CanvasPoint v0 = triangle.v0();
+    CanvasPoint v1 = triangle.v1();
+    CanvasPoint v2 = triangle.v2();
+    
+    // lets sort the y value, smallets y being first, since y = 0 is the top
+    if (v0.y > v1.y) std::swap(v0, v1);
+    if (v0.y > v2.y) std::swap(v0, v2);
+    if (v1.y > v2.y) std::swap(v1, v2);
+    // Now v0 = top, v1 = middle, v2 = bottom
+    
+    // Check for flat bottom ,v1 and v2 have same Y
+    if (std::abs(v1.y - v2.y) < 0.5f) {
+        drawFlatBottomTriangle(window, v0, v1, v2, colour, depthBuffer);
+    }
+    // now we check for flat top (v0 and v1 have same y)
+    else if (std::abs(v0.y - v1.y) < 0.5f) {
+        drawFlatTopTriangle(window, v0, v1, v2, colour, depthBuffer);
+    }
+    // General case: split into flat-bottom + flat-top
+    else {
+        // Find the point on edge v0-v2 at the same Y as v1
+        float splitX = interpolateOnEdge(v0, v2, v1.y, 0);
+        float splitDepth = interpolateOnEdge(v0, v2, v1.y, 2);
+        CanvasPoint splitPoint(splitX, v1.y, splitDepth);
+        
+        // Draw top triangle (flat bottom)
+        drawFlatBottomTriangle(window, v0, v1, splitPoint, colour, depthBuffer);
+        
+        // Draw bottom triangle (flat top)
+        drawFlatTopTriangle(window, v1, splitPoint, v2, colour, depthBuffer);
+    }
 }
 
 // <Mapping Textures> Week 3 Task 5
@@ -505,6 +498,7 @@ void drawFilledTriangle(DrawingWindow &window, CanvasTriangle triangle, TextureM
 	drawUnfilledTriangle(window, triangle, Colour(255,255,255));
 }
 
+// ------------------------------------- WEEK 4
 // Week 4 Task 2 
 // How to read and process .obj objects, specifically to turn it into a dynamic array of model triangles
 std::vector<ModelTriangle> loadObjModel(std::string filename, float scalingFactor, std::vector<Colour> palette){
@@ -621,6 +615,15 @@ CanvasPoint projectVertOnCanvasPoint(glm::vec3 cameraPos, glm::vec3 vertPos, flo
 	float x = vertPos.x - cameraPos.x;
 	float y = vertPos.y - cameraPos.y;
 	float z = vertPos.z - cameraPos.z; // Positive z is going towards you, negative z is away from you
+	glm::vec3 cameraToVert(x,y,z);
+
+	// IMPORTANT: We need to make sure that the multiplcation os -> camera orientation * camera vertex 
+	glm::vec3 adjustedVector = cameraOrientation * cameraToVert;
+
+	x = adjustedVector.x;
+	y = adjustedVector.y;
+	z = adjustedVector.z;
+
 	// apply the perspective projection
 	// formula: u = -f * (x/z) + (W/2)
 	// formula: v = f * (y/z) + (H/2)
@@ -676,41 +679,152 @@ void drawWireframe(std::vector<ModelTriangle> model, glm::vec3 cameraPos, float 
 // very simialr to task 6 and 8 but now we will just add the colour from the pallette and also use our drawFilledTriangle Function
 void drawRasterisedView(std::vector<ModelTriangle> model, glm::vec3 cameraPos, float focalLength, float imageScale, DrawingWindow &window){
 	std::vector<std::vector<float>> depthBuffer(window.width, std::vector<float>(window.height, 0.0f));
-	
+
+	std::map<std::string, std::pair<int, int>> stats; // {onscreen, offscreen}
+
 	for (size_t i = 0; i < model.size(); i++){
 		ModelTriangle curTri = model[i];
 
+		// CLIP CHECK: Skip triangles behind or too close to camera
+        bool shouldClip = false;
+        for (int j = 0; j < 3; j++) {
+            glm::vec3 relativePos = curTri.vertices[j] - cameraPos;
+            glm::vec3 cameraSpace = cameraOrientation * relativePos;
+            
+            // If any vertex is at or behind camera (z <= 0.1), skip entire triangle
+            if (cameraSpace.z >= -0.1f) {  // Using -0.1 because -z is distance
+                shouldClip = true;
+                break;
+            }
+        }
+        
+        if (shouldClip) continue;  // Skip this triangle
+		
 		CanvasTriangle tri2D = project3DTriangle(curTri, cameraPos, focalLength, imageScale, window);
-		Colour triColour = curTri.colour;
-		drawFilledTriangle(window, tri2D, triColour, depthBuffer);
-		if (curTri.colour.name == "Green") { // Or check RGB values
-			std::cout << "Green Triangle Z values: " 
-					<< curTri.vertices[0].z << ", "
-					<< curTri.vertices[1].z << ", "
-					<< curTri.vertices[2].z << std::endl;
-		}
-		if (curTri.colour.name == "Green") {
-			std::cout << "Green 2D Points:" << std::endl;
-			std::cout << "  P0: (" << tri2D.v0().x << ", " << tri2D.v0().y << ")" << std::endl;
-			std::cout << "  P1: (" << tri2D.v1().x << ", " << tri2D.v1().y << ")" << std::endl;
-			std::cout << "  P2: (" << tri2D.v2().x << ", " << tri2D.v2().y << ")" << std::endl;
-		}
-	}
+		// Check if ANY vertex is on screen
+        bool onScreen = false;
+        if ((tri2D.v0().x >= 0 && tri2D.v0().x < window.width && 
+             tri2D.v0().y >= 0 && tri2D.v0().y < window.height) ||
+            (tri2D.v1().x >= 0 && tri2D.v1().x < window.width && 
+             tri2D.v1().y >= 0 && tri2D.v1().y < window.height) ||
+            (tri2D.v2().x >= 0 && tri2D.v2().x < window.width && 
+             tri2D.v2().y >= 0 && tri2D.v2().y < window.height)) {
+            onScreen = true;
+        }
+        
+        if (onScreen) {
+            stats[curTri.colour.name].first++;
+        } else {
+            stats[curTri.colour.name].second++;
+        }
+        
+        // Print detailed info for missing surfaces
+		/*
+        if (curTri.colour.name == "Green" || 
+            curTri.colour.name == "Cyan" || 
+            curTri.colour.name == "White") {
+            std::cout << "\n" << curTri.colour.name << " Triangle #" << i << std::endl;
+            std::cout << "  3D vertices:" << std::endl;
+            std::cout << "    v0: (" << curTri.vertices[0].x << ", " << curTri.vertices[0].y << ", " << curTri.vertices[0].z << ")" << std::endl;
+            std::cout << "    v1: (" << curTri.vertices[1].x << ", " << curTri.vertices[1].y << ", " << curTri.vertices[1].z << ")" << std::endl;
+            std::cout << "    v2: (" << curTri.vertices[2].x << ", " << curTri.vertices[2].y << ", " << curTri.vertices[2].z << ")" << std::endl;
+            std::cout << "  2D projection:" << std::endl;
+            std::cout << "    v0: (" << tri2D.v0().x << ", " << tri2D.v0().y << ") depth=" << tri2D.v0().depth << std::endl;
+            std::cout << "    v1: (" << tri2D.v1().x << ", " << tri2D.v1().y << ") depth=" << tri2D.v1().depth << std::endl;
+            std::cout << "    v2: (" << tri2D.v2().x << ", " << tri2D.v2().y << ") depth=" << tri2D.v2().depth << std::endl;
+        }
+		*/
+        
+        drawFilledTriangle(window, tri2D, curTri.colour, depthBuffer);
+    }
+    
+	/*
+    std::cout << "\n=== On-screen vs Off-screen ===" << std::endl;
+    for (auto& pair : stats) {
+        std::cout << pair.first << ": " << pair.second.first << " on-screen, " 
+                  << pair.second.second << " off-screen" << std::endl;
+    }
+				  */
 }
 
 // Week 4 Task 9
 // Let's fix the render based on taking the z-depth in mind
 // We need to update some of our older functions to fully integarte this idea
 
+// ------------------------------------- WEEK 5
+// Week 5 Task 2
+// Create a 3x3 rotation matrix for rotating around the x-axis from the camera's pos
+// TAKE NOTE: the lines in code vs how it is in matrices are opposites, rows <-> cols
+glm::mat3 createRotationMatrixX(float angle){
+	// use the formula from 3rd slide in this task
+	return glm::mat3(
+		1.0f, 0.0f, 0.0f,
+		0.0f, cos(angle), sin(angle),
+		0.0f, -sin(angle), cos(angle)
+	);
+}
+// Now we are going to make a fn for rotating around the y-axis
+glm::mat3 createRotationMatrixY(float angle){
+	// use the formula from 3rd slide in this task
+	return glm::mat3(
+		cos(angle), 0.0f, -sin(angle),
+		0.0f, 1.0f, 0.0f,
+		sin(angle), 0, cos(angle)
+	);
+}
+
+// Week 5 Task 3
+// I need to update my projecttion function to accomodate for the new dimensionality of camera orientation
+// And then create new keybindings to manipulate the camera rotation
+
+// Week 5 Task 4
+// Make an orbiting function around obj, so for every frame, create a small y-axis rotation and apply rotation to camera pos
+
+// Week 5 Task 5 
+// Make sure as we orbit around the object, we are rotating the camera to look at the obj
+glm::mat3 lookAt(glm::vec3 cameraPos, glm::vec3 targetPoint) {
+    // 1. Calculate the Z-Axis (Pointing OUT of the screen, towards camera)
+    // We call this zAxis, confusingly often called "forward" in code but mathematically it's "back"
+    glm::vec3 zAxis = glm::normalize(cameraPos - targetPoint); 
+
+    // 2. Calculate the X-Axis (Right)
+    glm::vec3 upDir(0.0f, 1.0f, 0.0f);
+    glm::vec3 xAxis = glm::normalize(glm::cross(upDir, zAxis));
+
+    // 3. Calculate the Y-Axis (True Up)
+    // No need to normalize because xAxis and zAxis are already normalized and perpendicular
+    glm::vec3 yAxis = glm::cross(zAxis, xAxis); 
+
+    // 4. Create the Rotation Matrix
+    // We populate columns with the components to create the Transpose (View Matrix)
+    // Row 1 = xAxis, Row 2 = yAxis, Row 3 = zAxis
+    glm::mat3 viewRotation(
+        xAxis.x, yAxis.x, zAxis.x, // Column 0
+        xAxis.y, yAxis.y, zAxis.y, // Column 1
+        xAxis.z, yAxis.z, zAxis.z  // Column 2
+    );
+
+    return viewRotation;
+}
+
+// 
+
+void draw(DrawingWindow &window) { // I'm assuming these are runnign frame by frame
+	window.clearPixels(); //Is this just for cleanliness? - this is used for showing motion, like in animation, you don't let the previous frame persist
+	if (orbitEnabled){			
+		glm::mat3 orbitRotation = createRotationMatrixY(orbitSpeed);
+		cameraPos = orbitRotation * cameraPos;
+
+		cameraOrientation = lookAt(cameraPos, lookAtTarget);
+	}
+	window.clearPixels();
+	drawRasterisedView(model, cameraPos, focalLength,imageScale, window);
+}
 
 void handleEvent(SDL_Event event, DrawingWindow &window) {
 	if (event.type == SDL_KEYDOWN) {
-		if (event.key.keysym.sym == SDLK_LEFT) std::cout << "LEFT" << std::endl;
-		else if (event.key.keysym.sym == SDLK_RIGHT) std::cout << "RIGHT" << std::endl;
-		else if (event.key.keysym.sym == SDLK_UP) std::cout << "UP" << std::endl;
-		else if (event.key.keysym.sym == SDLK_DOWN) std::cout << "DOWN" << std::endl;
 		// Create random unfilled triangles
-		else if (event.key.keysym.sym == SDLK_u) {
+		if (event.key.keysym.sym == SDLK_u) {
 			// Create random points
             CanvasPoint a(rand() % window.width,  rand() % window.height);
             CanvasPoint b(rand() % window.width,  rand() % window.height);
@@ -737,6 +851,70 @@ void handleEvent(SDL_Event event, DrawingWindow &window) {
 			
             //drawFilledTriangle(window, tri, col,);
         }
+		// -- WEEK 5 UPDATES ONWARDs --
+		// Translation Controls
+		else if(event.key.keysym.sym == SDLK_w){
+			cameraPos.z -= translationStep;
+			std::cout << "Camera moved forward. New Z: " << cameraPos.z <<  std::endl;
+		}
+		else if(event.key.keysym.sym == SDLK_s){
+			cameraPos.z += translationStep;
+			std::cout << "Camera moved backwards. New Z: " << cameraPos.z <<  std::endl;
+		}
+		else if(event.key.keysym.sym == SDLK_a){
+			cameraPos.x -= translationStep;
+			std::cout << "Camera moved left. New X: " << cameraPos.x <<  std::endl;
+		}
+		else if(event.key.keysym.sym == SDLK_d){
+			cameraPos.x += translationStep;
+			std::cout << "Camera moved right. New X: " << cameraPos.x <<  std::endl;
+		}
+		else if(event.key.keysym.sym == SDLK_q){
+			cameraPos.y += translationStep;
+			std::cout << "Camera moved up. New Y: " << cameraPos.y <<  std::endl;
+		}
+		else if(event.key.keysym.sym == SDLK_e){
+			cameraPos.y -= translationStep;
+			std::cout << "Camera moved down. New Y: " << cameraPos.y <<  std::endl;
+		}
+		// Rotation Controls
+		else if(event.key.keysym.sym == SDLK_UP){
+			glm::mat3 rotationMatrix = createRotationMatrixX(-rotationAngle);
+			cameraOrientation = rotationMatrix * cameraOrientation;
+			std::cout << "Camera rotated up around X-axis" <<  std::endl;
+		}
+		else if(event.key.keysym.sym == SDLK_DOWN){
+			glm::mat3 rotationMatrix = createRotationMatrixX(rotationAngle);
+			cameraOrientation = rotationMatrix * cameraOrientation;
+			std::cout << "Camera rotated down around X-axis" <<  std::endl;
+		}
+		else if(event.key.keysym.sym == SDLK_LEFT){
+			glm::mat3 rotationMatrix = createRotationMatrixY(-rotationAngle);
+			cameraOrientation = rotationMatrix * cameraOrientation;
+			std::cout << "Camera rotated left around Y-axis" <<  std::endl;
+		}
+		else if(event.key.keysym.sym == SDLK_RIGHT){
+			glm::mat3 rotationMatrix = createRotationMatrixY(rotationAngle);
+			cameraOrientation = rotationMatrix * cameraOrientation;
+			std::cout << "Camera rotated right around Y-axis" <<  std::endl;
+		}
+		// Orbit Control
+		else if (event.key.keysym.sym == SDLK_o){
+			orbitEnabled = !orbitEnabled; //toggle it on and off
+			std::cout << "Orbit Mode: " << (orbitEnabled ? "ON" : "OFF") << std::endl;
+		}
+
+		// Camera Reset, just in case
+		else if (event.key.keysym.sym == SDLK_r){
+			cameraPos = glm::vec3(0.0f, 0.0f, 4.0f);
+			cameraOrientation = glm::mat3(
+                1.0f, 0.0f, 0.0f,
+                0.0f, 1.0f, 0.0f,
+                0.0f, 0.0f, 1.0f
+            );
+			orbitEnabled = false;
+			std::cout << "Camera reset to initial position and orientation, orbit disabled" << std::endl;
+		}
 	} else if (event.type == SDL_MOUSEBUTTONDOWN) {
 		window.savePPM("output.ppm");
 		window.saveBMP("output.bmp");
@@ -757,7 +935,6 @@ int main(int argc, char *argv[]) {
     std::cout << std::endl;
 	
 	DrawingWindow window = DrawingWindow(WIDTH, HEIGHT, false);
-
 	// TASK TESTS START ----------------------------------------------------------------------------------------------------------------->
 	// Week 3 Task 4
 	/*drawFilledTriangle(window, CanvasTriangle(CanvasPoint(200,200), CanvasPoint(700,700), CanvasPoint(1400,600)), Colour(235,50,123));
@@ -805,20 +982,36 @@ int main(int argc, char *argv[]) {
 	std::cout << "V : " << projectedPoints.y << std::endl;
 	*/
 	// Week 4 Task 6 & 7 & 8 Test
+	/*
 	std::vector<Colour> palette = loadMaterials("../../../04 Wireframes and Rasterising/models/cornell-box.mtl");
 	std::vector<ModelTriangle> model = loadObjModel("../../../04 Wireframes and Rasterising/models/cornell-box.obj",0.35, palette);
-	glm::vec3 cameraPos(0.0,0.5,4.0);
+	std::cout << "Total triangles loaded: " << model.size() << std::endl;
+	glm::vec3 cameraPos(0.0,0.0,4.0);
 	float focalLength = 2.0f;
-	float imageScale = 150;
+	float imageScale = 160;
+	*/
 	//drawPointCloud(model, cameraPos, focalLength, imageScale, window);
 	//drawWireframe(model, cameraPos, focalLength, imageScale, window);
-	drawRasterisedView(model, cameraPos, focalLength,imageScale, window);
+	//drawRasterisedView(model, cameraPos, focalLength,imageScale, window);
+	// Week 5 Task 2 Test
+	palette = loadMaterials("../../../04 Wireframes and Rasterising/models/cornell-box.mtl");
+	model = loadObjModel("../../../04 Wireframes and Rasterising/models/cornell-box.obj",0.35, palette);
+	// Test with identity matrix
+	glm::mat3 identity = glm::mat3(1.0f);
+	glm::vec3 testVec(1.0f, 2.0f, 3.0f);
+
+	glm::vec3 result1 = identity * testVec;
+	std::cout << "Matrix * Vector: (" << result1.x << ", " << result1.y << ", " << result1.z << ")" << std::endl;
+
+// This might not even compile or give weird results:
+// glm::vec3 result2 = testVec * identity;
 	// TASK TESTS END ----------------------------------------------------------------------------------------------------------------->
 
 	SDL_Event event;
 	while (true) {
 		// We MUST poll for events - otherwise the window will freeze !
 		if (window.pollForInputEvents(event)) handleEvent(event, window);
+		draw(window);
 		window.renderFrame();
 		// Need to render the frame at the end, or nothing actually gets shown on the screen !
 	}
