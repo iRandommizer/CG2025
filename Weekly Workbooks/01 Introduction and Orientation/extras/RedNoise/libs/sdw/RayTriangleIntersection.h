@@ -5,10 +5,10 @@
 #include "ModelTriangle.h"
 
 struct RayTriangleIntersection {
-	glm::vec3 intersectionPoint;
-	float distanceFromCamera;
-	ModelTriangle intersectedTriangle;
-	size_t triangleIndex;
+	glm::vec3 intersectionPoint; // hits are stored in 3D space (x,y,z)
+	float distanceFromCamera; // How far the hit was 
+	ModelTriangle intersectedTriangle; // which triangle was the hit
+	size_t triangleIndex; // Index of the tirangle in the model array
 
 	RayTriangleIntersection();
 	RayTriangleIntersection(const glm::vec3 &point, float distance, const ModelTriangle &triangle, size_t index);

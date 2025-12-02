@@ -1,6 +1,9 @@
 #include "RayTriangleIntersection.h"
 
+// Defualt constructor
 RayTriangleIntersection::RayTriangleIntersection() = default;
+
+// Parameterized Constructor 
 RayTriangleIntersection::RayTriangleIntersection(const glm::vec3 &point, float distance, const ModelTriangle &triangle, size_t index) :
 		intersectionPoint(point),
 		distanceFromCamera(distance),

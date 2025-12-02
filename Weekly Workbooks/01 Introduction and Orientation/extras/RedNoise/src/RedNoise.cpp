@@ -1,3 +1,4 @@
+#include <RayTriangleIntersection.h>
 #include <ModelTriangle.h>
 #include <TextureMap.h>
 #include <CanvasTriangle.h>
@@ -33,6 +34,9 @@ float rotationAngle = 0.05f;
 bool orbitEnabled = false;
 float orbitSpeed = 0.0018f; // this is in radians
 glm::vec3 lookAtTarget(0.0f, 0.0f,0.0f); // a variable to allow us to have a target position to look at
+enum RenderMode { WIREFRAME, RASTERISED, RAYTRACED}; // interesting, it's the same as in c#
+RenderMode currentMode = RAYTRACED;
+glm::vec3 lightPos(0.0f, 0.8f, 0.0f);
 
 
 /// SUMMARY
@@ -677,7 +681,7 @@ void drawWireframe(std::vector<ModelTriangle> model, glm::vec3 cameraPos, float 
 
 // Week 4 Task 8
 // very simialr to task 6 and 8 but now we will just add the colour from the pallette and also use our drawFilledTriangle Function
-void drawRasterisedView(std::vector<ModelTriangle> model, glm::vec3 cameraPos, float focalLength, float imageScale, DrawingWindow &window){
+void drawRasterisedScene(std::vector<ModelTriangle> model, glm::vec3 cameraPos, float focalLength, float imageScale, DrawingWindow &window){
 	std::vector<std::vector<float>> depthBuffer(window.width, std::vector<float>(window.height, 0.0f));
 
 	std::map<std::string, std::pair<int, int>> stats; // {onscreen, offscreen}
@@ -783,20 +787,20 @@ glm::mat3 createRotationMatrixY(float angle){
 // Week 5 Task 5 
 // Make sure as we orbit around the object, we are rotating the camera to look at the obj
 glm::mat3 lookAt(glm::vec3 cameraPos, glm::vec3 targetPoint) {
-    // 1. Calculate the Z-Axis (Pointing OUT of the screen, towards camera)
+    // Calculate the Z-Axis
     // We call this zAxis, confusingly often called "forward" in code but mathematically it's "back"
     glm::vec3 zAxis = glm::normalize(cameraPos - targetPoint); 
 
-    // 2. Calculate the X-Axis (Right)
+    // Calculate the X-Axis (Right)
     glm::vec3 upDir(0.0f, 1.0f, 0.0f);
     glm::vec3 xAxis = glm::normalize(glm::cross(upDir, zAxis));
 
-    // 3. Calculate the Y-Axis (True Up)
-    // No need to normalize because xAxis and zAxis are already normalized and perpendicular
+    // Calculate the Y-Axis (True Up)
+    // we dont need to normalize because xAxis and zAxis are already normalized
     glm::vec3 yAxis = glm::cross(zAxis, xAxis); 
 
-    // 4. Create the Rotation Matrix
-    // We populate columns with the components to create the Transpose (View Matrix)
+    // Create the Rotation Matrix
+    // We populate columns with the components to create the Transpose
     // Row 1 = xAxis, Row 2 = yAxis, Row 3 = zAxis
     glm::mat3 viewRotation(
         xAxis.x, yAxis.x, zAxis.x, // Column 0
@@ -807,7 +811,145 @@ glm::mat3 lookAt(glm::vec3 cameraPos, glm::vec3 targetPoint) {
     return viewRotation;
 }
 
-// 
+// Week 6 Task 2 & 3
+// Quite interesting that we kinda see the concept of barycentric coordinates again
+// We need to create a function which shoots a ray and see if there is any intersect with triangle and then produce a pixel based on that "hit"
+RayTriangleIntersection getClosestIntersection(glm::vec3 cameraPos, glm::vec3 rayDirection, std::vector<ModelTriangle> &model){
+	// Initialise RayTriangleIntersection variable
+	RayTriangleIntersection closestIntersection;
+	closestIntersection.distanceFromCamera = std::numeric_limits<float>::max(); // start with the max
+
+	// For exvery triangle in the scene
+	for (size_t i = 0; i < model.size(); i++){
+		ModelTriangle curTri = model[i];
+
+		// We first calculate the 2 edges of the triangle
+		glm::vec3 e0 = curTri.vertices[1] - curTri.vertices[0];
+		glm::vec3 e1 = curTri.vertices[2] - curTri.vertices[0];
+		// then calculate the vector from triangle's first vertex to camera
+		glm::vec3 SPVector = cameraPos - curTri.vertices[0];
+		// we build this into a 3x3 matrix 
+		glm::mat3 DEMatrix(-rayDirection, e0, e1);
+
+		glm::vec3 possibleSolution = glm::inverse(DEMatrix) * SPVector;
+
+		// separate it into t, u, v
+		float t = possibleSolution.x;
+		float u = possibleSolution.y;
+		float v = possibleSolution.z;
+
+		// Just to make sure we have proper intersections
+		// Is the intersection behind the camera??
+		if (t < 0.0f) continue;
+		
+		// Is the intersection inside the triangle? similar to barycentric coodinates
+		if (u < 0.0f || v < 0.0f || u+v > 1) continue;
+
+		// Check if its the closer hit that the previous
+		if (t < closestIntersection.distanceFromCamera){
+			glm::vec3 intersectionPoint = cameraPos + t * rayDirection;
+			// Store the respective hit info
+			closestIntersection.intersectionPoint = intersectionPoint;
+			closestIntersection.distanceFromCamera = t;
+			closestIntersection.intersectedTriangle = curTri;
+			closestIntersection.triangleIndex = i;
+		}
+	}
+	return closestIntersection;
+}
+
+// Week 6 Task 4 & 5
+// Render the entire scene by raycasting, for every pixel ON SCREEn, cast a ray from camera, find what it hits and paint pixel
+// Core Algo:
+// - Calculate 3D ray direction from camera to pxl
+// - If there is a valid hit:
+//	- Colour pxl with hit triangle's colour
+// - Else, color black
+void drawRayTracedScene(DrawingWindow &window) {
+	for (size_t y = 0; y < window.height; y++){
+		for (size_t x = 0; x < window.width; x++){
+			// Convert the pixel (x,y) to ray direction in 3D space
+			// This means we have to remove the offset and scaling we did when we projected
+			float screenX = (x - window.width/2.0f) / imageScale;
+			float screenY = -(y - window.height/2.0f) / imageScale; // we have to flip the y because SDL Y increases downwards
+
+			// Lets also define the ray direction in camera space
+			glm::vec3 rayDirCameraSpace(screenX, screenY, -focalLength);
+			// Since this is suppose to be a dir, it has to be normalised;
+			rayDirCameraSpace = glm::normalize(rayDirCameraSpace);
+
+			// Now we have to transform from camera space to world space
+			// Transpose reverses the transform for us -> camera-to-world from world-to-camera
+			glm::mat3 cameraToWorld = glm::transpose(cameraOrientation);
+			// Multiplying the transform with the ray direction converts our ray dir from camera's local coordinate system to the global world coordinates
+			glm::vec3 rayDirWorldSpace = cameraToWorld * rayDirCameraSpace;
+
+			// produce the rays with the given directions
+			RayTriangleIntersection intersection = getClosestIntersection(cameraPos, rayDirWorldSpace, model);
+
+			// Check if we hit anything valid
+			if (intersection.distanceFromCamera < std::numeric_limits<float>::max()){
+
+				// TASK 5: Add the shadow part
+				// Cast shadow ray from hit point to the light pos
+				glm::vec3 toLight = lightPos - intersection.intersectionPoint;
+				float distanceToLight = glm::length(toLight); // Distance to light, basically gets the magnitude
+				glm::vec3 lightDir = glm::normalize(toLight);
+
+				// This is a way to handle the shadow acne and might be better
+				// Since part of the issue of shadow acne is that surface is being compared to itslef
+				// we shift the shadow origin slight infront of where it is so that the ray doesn't hit the same triangle
+				glm::vec3 shadowRayOrigin = intersection.intersectionPoint + lightDir * 0.001f;
+
+				// cast shadow ray to see if anything blocks the light
+				RayTriangleIntersection shadowIntersection = getClosestIntersection(shadowRayOrigin, lightDir, model);
+
+				// We then determine if the point is in the shadow
+				bool inShadow = false;
+				if (shadowIntersection.distanceFromCamera < std::numeric_limits<float>::max()){
+					// Check if something was hit by the shadow ray and if its between tha surface and the light
+					if(shadowIntersection.distanceFromCamera < distanceToLight){
+						inShadow = true;
+					}
+				}
+
+				Colour triColour = intersection.intersectedTriangle.colour;
+				//We'll then modify the colour to give it a shadow effect if its indeed in the shadow
+				if(inShadow){
+					triColour.red = round(triColour.red * 0.3f);
+					triColour.green = round(triColour.green * 0.3f);
+					triColour.blue = round(triColour.blue * 0.3f);
+				}
+				uint32_t packedColour = (255 << 24) + (triColour.red << 16) + (triColour.green << 8) + triColour.blue;
+				window.setPixelColour(x,y,packedColour);
+			}
+			else{
+				uint32_t black = (255 << 24) + (0 << 16) + (0 << 8) + 0;
+				window.setPixelColour(x,y, black);
+			}
+		}
+	}
+}
+
+// Week 7 Task 2
+// Create distance based light using the formula shown in slides, then update our raytracing function
+// General Algo:
+// - calculate dist from surface to light
+// - apply the inverse square law
+// - we need to make sure the brightness is clamped from 0 to 1
+float calculateProximityLighting(glm::vec3 intersectionPoint, glm::vec3 lightPos){
+	glm::vec3 toLight = lightPos - intersections; // get the displacement vector (has both dir and magnitude)
+	float distance = glm::length(toLight); // Just get the magnitude
+
+	// Inverse square law: brightness = strength / (4 * pi * r^2)
+	float ligthStrength = 5.0f;
+	float brightness = ligthStrength / (4.0f * M_PI * distance * distance);
+
+	brightness = std::min(brightness,1.0f);
+	brightness = std::max(brightness,0.0f);
+
+	return brightness;
+}
 
 void draw(DrawingWindow &window) { // I'm assuming these are runnign frame by frame
 	window.clearPixels(); //Is this just for cleanliness? - this is used for showing motion, like in animation, you don't let the previous frame persist
@@ -817,8 +959,19 @@ void draw(DrawingWindow &window) { // I'm assuming these are runnign frame by fr
 
 		cameraOrientation = lookAt(cameraPos, lookAtTarget);
 	}
-	window.clearPixels();
-	drawRasterisedView(model, cameraPos, focalLength,imageScale, window);
+	// Switch between rendering modes
+	if (currentMode == RAYTRACED){
+		window.clearPixels();
+		drawRayTracedScene(window);
+	}
+	else if (currentMode == RASTERISED){
+		window.clearPixels();
+		drawRasterisedScene(model , cameraPos, focalLength, imageScale, window);
+	}
+	else if (currentMode == WIREFRAME) {
+		window.clearPixels();
+		drawWireframe(model,cameraPos, focalLength, imageScale, window);
+	}
 }
 
 void handleEvent(SDL_Event event, DrawingWindow &window) {
@@ -852,7 +1005,7 @@ void handleEvent(SDL_Event event, DrawingWindow &window) {
             //drawFilledTriangle(window, tri, col,);
         }
 		// -- WEEK 5 UPDATES ONWARDs --
-		// Translation Controls
+		// TRANSLATION CONTROL
 		else if(event.key.keysym.sym == SDLK_w){
 			cameraPos.z -= translationStep;
 			std::cout << "Camera moved forward. New Z: " << cameraPos.z <<  std::endl;
@@ -877,7 +1030,7 @@ void handleEvent(SDL_Event event, DrawingWindow &window) {
 			cameraPos.y -= translationStep;
 			std::cout << "Camera moved down. New Y: " << cameraPos.y <<  std::endl;
 		}
-		// Rotation Controls
+		// ROTATION CONTROL
 		else if(event.key.keysym.sym == SDLK_UP){
 			glm::mat3 rotationMatrix = createRotationMatrixX(-rotationAngle);
 			cameraOrientation = rotationMatrix * cameraOrientation;
@@ -898,12 +1051,24 @@ void handleEvent(SDL_Event event, DrawingWindow &window) {
 			cameraOrientation = rotationMatrix * cameraOrientation;
 			std::cout << "Camera rotated right around Y-axis" <<  std::endl;
 		}
-		// Orbit Control
+		// ORBIT CCONTROL
 		else if (event.key.keysym.sym == SDLK_o){
 			orbitEnabled = !orbitEnabled; //toggle it on and off
 			std::cout << "Orbit Mode: " << (orbitEnabled ? "ON" : "OFF") << std::endl;
 		}
-
+		// RENDERING CONTROL
+		else if(event.key.keysym.sym == SDLK_1){
+			currentMode = WIREFRAME;
+			std::cout << "Switched to Wireframe Mode" << std::endl;
+		}
+		else if(event.key.keysym.sym == SDLK_2){
+			currentMode = RASTERISED;
+			std::cout << "Switched to Rasterised Mode" << std::endl;
+		}
+		else if(event.key.keysym.sym == SDLK_3){
+			currentMode = RAYTRACED;
+			std::cout << "Switched to Raytraced Mode" << std::endl;
+		}
 		// Camera Reset, just in case
 		else if (event.key.keysym.sym == SDLK_r){
 			cameraPos = glm::vec3(0.0f, 0.0f, 4.0f);
@@ -914,6 +1079,11 @@ void handleEvent(SDL_Event event, DrawingWindow &window) {
             );
 			orbitEnabled = false;
 			std::cout << "Camera reset to initial position and orientation, orbit disabled" << std::endl;
+		}
+
+		else if (event.key.keysym.sym == SDLK_t) {
+			std::cout << "\n=== TESTING RAY INTERSECTION ===" << std::endl;
+			testRayIntersection(window);
 		}
 	} else if (event.type == SDL_MOUSEBUTTONDOWN) {
 		window.savePPM("output.ppm");
