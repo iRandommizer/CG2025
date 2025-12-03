@@ -16,7 +16,7 @@
 
 TextureMap texture("../../../03 Triangles and Textures/texture.ppm");
 // GLOBAL CAMERA VARIABLES
-glm::vec3 cameraPos(0.0f, 0.0f, 4.0f);
+glm::vec3 cameraPos(0.0f, 1.0f, 4.0f);
 // This one is bit more confusing:
 // for reference -> Col 0 = right vector, Col 1 = up vector, Col 2 = forward vector
 glm::mat3 cameraOrientation(
@@ -35,8 +35,14 @@ bool orbitEnabled = false;
 float orbitSpeed = 0.0018f; // this is in radians
 glm::vec3 lookAtTarget(0.0f, 0.0f,0.0f); // a variable to allow us to have a target position to look at
 enum RenderMode { WIREFRAME, RASTERISED, RAYTRACED}; // interesting, it's the same as in c#
-RenderMode currentMode = RAYTRACED;
-glm::vec3 lightPos(0.0f, 0.8f, 0.0f);
+RenderMode currentMode = WIREFRAME;
+// - Lighting Control Paramter
+glm::vec3 lightPos(0.0f, 1.5f, 2.0f);
+float ligthStrength = 200.0f;
+float ambientLevel = 0.15f;
+float specularExponent = 128.0f;
+bool gouraudEnabled = true;
+bool phongEnabled = true;
 
 
 /// SUMMARY
@@ -503,7 +509,7 @@ void drawFilledTriangle(DrawingWindow &window, CanvasTriangle triangle, TextureM
 }
 
 // ------------------------------------- WEEK 4
-// Week 4 Task 2 
+// Week 4 Task 2 & Week 7 Task 3
 // How to read and process .obj objects, specifically to turn it into a dynamic array of model triangles
 std::vector<ModelTriangle> loadObjModel(std::string filename, float scalingFactor, std::vector<Colour> palette){
 	// Setup Contrainers 
@@ -516,7 +522,7 @@ std::vector<ModelTriangle> loadObjModel(std::string filename, float scalingFacto
 
 	// Added on from Wk 4 Task 3
 	// Lets give a defualt colour, just in case, no colour was given
-	Colour currentColour = Colour(255,255,255);
+	Colour currentColour = Colour(255,0,0);
 
 	// Read the file line by line
 	while (std::getline(file, line)){ // try to grab the next line from "file", if you manage to , run the loop
@@ -564,8 +570,54 @@ std::vector<ModelTriangle> loadObjModel(std::string filename, float scalingFacto
 			
 			// Now having both, we cna create the triangle with the colour inputed
 			ModelTriangle triangle(pt1, pt2, pt3, currentColour);
+
+			// Week 7 Task 3 addition
+			// Formula: normal = (v1 - v0) * (v2 - v0)
+			glm::vec3 edge1 = pt2 - pt1;
+			glm::vec3 edge2 = pt3 - pt1;
+			glm::vec3 normal = glm::cross(edge1, edge2);
+			triangle.normal = glm::normalize(normal); // make sure we onlt get the dir of the normal
+
+			// Week 7 Task 6
+			// Store the vert index
+			triangle.vertIdx[0] = v1Idx;
+			triangle.vertIdx[1] = v2Idx;
+			triangle.vertIdx[2] = v3Idx;
+
 			triangles.push_back(triangle);
 		}
+	}
+
+	// Week 7 Task 6
+	// Here is where we calculate the vertex normals from the face normals
+	std::vector<glm::vec3> vertexNormals(tempVertices.size(), glm::vec3(0.0f)); // help accumalate face normals
+	std::vector<int> vertexCounts(tempVertices.size(), 0); // help track normal count, so we can use it to be the division factor
+
+	// To accumalate the normals at each vertex
+	for (size_t i = 0; i < triangles.size(); i++){
+		ModelTriangle& tri = triangles[i];
+		vertexNormals[tri.vertIdx[0]] += tri.normal;
+		vertexNormals[tri.vertIdx[1]] += tri.normal;
+		vertexNormals[tri.vertIdx[2]] += tri.normal;
+
+		vertexCounts[tri.vertIdx[0]]++;
+		vertexCounts[tri.vertIdx[1]]++;
+		vertexCounts[tri.vertIdx[2]]++;
+	}
+
+	// Then we average and normalise 
+	for (size_t v = 0; v <vertexNormals.size(); v++){
+		if (vertexCounts[v] > 0){
+			vertexNormals[v] = glm::normalize(vertexNormals[v]);
+		}
+	}
+
+	// assign vertex normals to triangles
+	for (size_t i = 0; i < triangles.size(); i++){
+		ModelTriangle& tri = triangles[i];
+		tri.vertNormals[0] = vertexNormals[tri.vertIdx[0]];
+		tri.vertNormals[1] = vertexNormals[tri.vertIdx[1]];
+		tri.vertNormals[2] = vertexNormals[tri.vertIdx[2]];
 	}
 
 	return triangles;
@@ -858,6 +910,124 @@ RayTriangleIntersection getClosestIntersection(glm::vec3 cameraPos, glm::vec3 ra
 	return closestIntersection;
 }
 
+// Week 7 Task 2
+// Create distance based light using the formula shown in slides, then update our raytracing function
+// General Algo:
+// - calculate dist from surface to light
+// - apply the inverse square law
+// - we need to make sure the brightness is clamped from 0 to 1
+float calculateProximityLighting(glm::vec3 intersectionPoint, glm::vec3 lightPos){
+	glm::vec3 toLight = lightPos - intersectionPoint; // get the displacement vector (has both dir and magnitude)
+	float distance = glm::length(toLight); // Just get the magnitude
+
+	// Inverse square law: brightness = strength / (4 * pi * r^2)
+	float brightness = ligthStrength / (4.0f * M_PI * distance * distance);
+
+	brightness = std::min(brightness,1.0f);
+	brightness = std::max(brightness,0.0f);
+
+	return brightness;
+}
+
+// Helper Function for clamping values
+int clampVal(float min, float max, float inputVal){
+	return float(std::min(max, std::max(min, inputVal)));
+}
+
+// Week 7 Task 3
+// Further advance light realism by taking into account their surface normals
+// Use dot product to find angle between normal and light direction
+// then multiply that to the brightness
+float calculateAngleOfIncidenceLight(glm::vec3 surfaceNormal, glm::vec3 intersectionPoint, glm::vec3 lightPos){
+	glm::vec3 toLight = lightPos - intersectionPoint;
+	glm::vec3 lightDir = glm::normalize(toLight);
+
+	// Get the dot product
+	float angleOfIncidence = glm::dot(surfaceNormal, lightDir);
+
+	angleOfIncidence = std::max(0.0f, angleOfIncidence);
+	return angleOfIncidence;
+}
+
+// Week 7 Task 4
+// Calculate specular light via calculating reflection vector, comparing the reflection dir with camera view dir
+float calculateSpecularLightning(glm::vec3 surfaceNormal, glm::vec3 intersectionPoint){
+	// Calculate light dir
+	glm::vec3 toLightDir = glm::normalize(lightPos - intersectionPoint);
+
+	// calculate view dir (from surface to camera)
+	glm::vec3 toViewDir = glm::normalize(cameraPos - intersectionPoint);
+
+	// Reflection Formuale: Rr = Ri - 2N(Ri*N)
+	// Rr = Reflection vector
+	// Ri = Incident Ray, incoming light ray
+	// N = Surface Normal
+	glm::vec3 incidentRay = -toLightDir;
+	float dotProduct = glm::dot(incidentRay, surfaceNormal);
+	glm::vec3 reflectionDir = incidentRay - 2.0f*surfaceNormal*dotProduct;
+
+	float specularDot = glm::dot(reflectionDir , toViewDir);
+	specularDot = std::max(0.0f, specularDot); // just incase the value goes below 0 and point away from camera
+
+	//Apply specular exponent
+	float specularBrightness = std::pow(specularDot, specularExponent);
+
+	return specularBrightness;
+}
+
+// Week 7 Task 5
+// Add a limit to the minimum brightness an object faces to fake the ambient lighting effect
+// Modify the raycast function to add that limit to the brightness' minimum
+
+// Week 7 Task 6
+// In order to get the gouraud shading, we need to interpolate the face normals to make it smooth
+// we try to calculate the vertex normals and then calculate the brightness at each vertex and interpolate that
+// we have to modify the loadObjModel fn again 
+// We need to store the vertexNormal values but more importantly a way to save the vert index(idx) so that we can map each of them 
+// and and identify all triangles sharing a common vertex. Probably best done when object is loaded
+
+// So i just realised that the provided barycentric coordinates fn works only in vec2 but we need it in vec3 so I copied it and just changed 
+// some of the var type to vec3
+glm::vec3 convertToBarycentricCoordinates3D(glm::vec3 v0, glm::vec3 v1, glm::vec3 v2, glm::vec3 r)
+{
+    glm::vec3 e0 = v1 - v0;
+    glm::vec3 e1 = v2 - v0;
+    glm::vec3 e2 = r - v0;
+    float d00 = glm::dot(e0, e0);
+    float d01 = glm::dot(e0, e1);
+    float d11 = glm::dot(e1, e1);
+    float d20 = glm::dot(e2, e0);
+    float d21 = glm::dot(e2, e1);
+    float denominator = d00 * d11 - d01 * d01;
+    float u = (d11 * d20 - d01 * d21) / denominator;
+    float v = (d00 * d21 - d01 * d20) / denominator;
+    float w = 1.0f - u - v;
+    return glm::vec3(u,v,w);
+}
+
+// Now let's calculate the brightness 
+float calculateGouraudBrightness(RayTriangleIntersection& intersection){
+	ModelTriangle tri = intersection.intersectedTriangle;
+
+	// Calculate brightness at each vertex
+	float v0Brightness = calculateProximityLighting(tri.vertices[0], lightPos) * calculateAngleOfIncidenceLight(tri.vertNormals[0], tri.vertices[0], lightPos);
+	float v1Brightness = calculateProximityLighting(tri.vertices[1], lightPos) * calculateAngleOfIncidenceLight(tri.vertNormals[1], tri.vertices[1], lightPos);
+	float v2Brightness = calculateProximityLighting(tri.vertices[2], lightPos) * calculateAngleOfIncidenceLight(tri.vertNormals[2], tri.vertices[2], lightPos);
+
+	// Now we get the barycentric weights to get the proportions
+	glm::vec3 weights = convertToBarycentricCoordinates3D(tri.vertices[0], tri.vertices[1], tri.vertices[2], intersection.intersectionPoint);
+
+	float u = weights.x;
+	float v = weights.y;
+	float w = weights.z;
+
+	return w * v0Brightness + u * v1Brightness + v * v2Brightness;
+}
+
+// Week 7 Task 7
+// We then add a phong shading calculation which is quite similar to gouraud, we interpolate the normals instead
+// Nvm we added in the raycast function becasue the interpolaion of normals was also used by the specular
+
 // Week 6 Task 4 & 5
 // Render the entire scene by raycasting, for every pixel ON SCREEn, cast a ray from camera, find what it hits and paint pixel
 // Core Algo:
@@ -913,13 +1083,68 @@ void drawRayTracedScene(DrawingWindow &window) {
 					}
 				}
 
+				// Week 7 Task 2 & 3 & 6
+				// Calculate both brightness modification
+				float diffuseBrightness;
+				// We also need to update how we handle the specular lightining
+				glm::vec3 surfaceNormal;
+
+				if (phongEnabled) {
+					ModelTriangle tri = intersection.intersectedTriangle;
+					glm::vec3 weights = convertToBarycentricCoordinates3D(tri.vertices[0], tri.vertices[1], tri.vertices[2], intersection.intersectionPoint);
+					float u = weights.x;
+					float v = weights.y;
+					float w = weights.z;
+					surfaceNormal = w * tri.vertNormals[0] + u * tri.vertNormals[1] + v * tri.vertNormals[2];
+					surfaceNormal = glm::normalize(surfaceNormal);
+					diffuseBrightness = calculateProximityLighting(intersection.intersectionPoint, lightPos) * calculateAngleOfIncidenceLight(surfaceNormal, intersection.intersectionPoint, lightPos);
+					
+				}
+				else if (gouraudEnabled){
+					diffuseBrightness = calculateGouraudBrightness(intersection);
+				}
+				else{					
+					float proximityBrigthness = calculateProximityLighting(intersection.intersectionPoint, lightPos);
+					float angleOfIncidenceBrightness = calculateAngleOfIncidenceLight(intersection.intersectedTriangle.normal, intersection.intersectionPoint, lightPos);
+					diffuseBrightness = proximityBrigthness * angleOfIncidenceBrightness;
+				}
+
+				//Week 7 Task 4
+				// Calculate specular ligthning
+
+				float specularBrightness = 0.0f;
+				if (phongEnabled){				
+					specularBrightness = calculateSpecularLightning(surfaceNormal, intersection.intersectionPoint);
+				}
+				
+
 				Colour triColour = intersection.intersectedTriangle.colour;
 				//We'll then modify the colour to give it a shadow effect if its indeed in the shadow
-				if(inShadow){
-					triColour.red = round(triColour.red * 0.3f);
-					triColour.green = round(triColour.green * 0.3f);
-					triColour.blue = round(triColour.blue * 0.3f);
+				if(inShadow){					
+					diffuseBrightness *= 0.3f;
+					specularBrightness = 0.0f;
 				}
+
+				// Week 7 Task 5, applying ambient lighting
+				diffuseBrightness = std::max(diffuseBrightness, ambientLevel);
+
+				triColour.red = round(triColour.red * diffuseBrightness);
+				triColour.green = round(triColour.green * diffuseBrightness);
+				triColour.blue = round(triColour.blue * diffuseBrightness);
+
+				// Add specular white highlight (addititve effect)
+				// Adding like this is straight up making the colours brighter since it's added to each dimension the same
+				// I eventually added multiplying the proximityBrightness because I feel like the specular light should also change based on distance
+				int specularWhite = round(255.0f * specularBrightness);
+				triColour.red += specularWhite;
+				triColour.green += specularWhite;
+				triColour.blue += specularWhite;
+
+				// Tested out bright scenarios and realised I need to clamp the values
+				triColour.red = clampVal(0,255,triColour.red);
+				triColour.green = clampVal(0,255,triColour.green);
+				triColour.blue = clampVal(0,255,triColour.blue);
+
 				uint32_t packedColour = (255 << 24) + (triColour.red << 16) + (triColour.green << 8) + triColour.blue;
 				window.setPixelColour(x,y,packedColour);
 			}
@@ -931,32 +1156,12 @@ void drawRayTracedScene(DrawingWindow &window) {
 	}
 }
 
-// Week 7 Task 2
-// Create distance based light using the formula shown in slides, then update our raytracing function
-// General Algo:
-// - calculate dist from surface to light
-// - apply the inverse square law
-// - we need to make sure the brightness is clamped from 0 to 1
-float calculateProximityLighting(glm::vec3 intersectionPoint, glm::vec3 lightPos){
-	glm::vec3 toLight = lightPos - intersections; // get the displacement vector (has both dir and magnitude)
-	float distance = glm::length(toLight); // Just get the magnitude
-
-	// Inverse square law: brightness = strength / (4 * pi * r^2)
-	float ligthStrength = 5.0f;
-	float brightness = ligthStrength / (4.0f * M_PI * distance * distance);
-
-	brightness = std::min(brightness,1.0f);
-	brightness = std::max(brightness,0.0f);
-
-	return brightness;
-}
-
 void draw(DrawingWindow &window) { // I'm assuming these are runnign frame by frame
 	window.clearPixels(); //Is this just for cleanliness? - this is used for showing motion, like in animation, you don't let the previous frame persist
 	if (orbitEnabled){			
 		glm::mat3 orbitRotation = createRotationMatrixY(orbitSpeed);
 		cameraPos = orbitRotation * cameraPos;
-
+		lightPos[1] -= 0.01f;
 		cameraOrientation = lookAt(cameraPos, lookAtTarget);
 	}
 	// Switch between rendering modes
@@ -977,6 +1182,7 @@ void draw(DrawingWindow &window) { // I'm assuming these are runnign frame by fr
 void handleEvent(SDL_Event event, DrawingWindow &window) {
 	if (event.type == SDL_KEYDOWN) {
 		// Create random unfilled triangles
+		/*
 		if (event.key.keysym.sym == SDLK_u) {
 			// Create random points
             CanvasPoint a(rand() % window.width,  rand() % window.height);
@@ -1004,9 +1210,10 @@ void handleEvent(SDL_Event event, DrawingWindow &window) {
 			
             //drawFilledTriangle(window, tri, col,);
         }
+			*/
 		// -- WEEK 5 UPDATES ONWARDs --
 		// TRANSLATION CONTROL
-		else if(event.key.keysym.sym == SDLK_w){
+		if(event.key.keysym.sym == SDLK_w){
 			cameraPos.z -= translationStep;
 			std::cout << "Camera moved forward. New Z: " << cameraPos.z <<  std::endl;
 		}
@@ -1069,6 +1276,16 @@ void handleEvent(SDL_Event event, DrawingWindow &window) {
 			currentMode = RAYTRACED;
 			std::cout << "Switched to Raytraced Mode" << std::endl;
 		}
+		else if(event.key.keysym.sym == SDLK_g){
+			gouraudEnabled = !gouraudEnabled;
+			if (gouraudEnabled) phongEnabled = false;
+			std::cout << "Gouraud: " << (gouraudEnabled ? "ON" : "OFF") << std::endl;
+		}
+		else if(event.key.keysym.sym == SDLK_p){
+			phongEnabled = !phongEnabled;
+			if (phongEnabled) gouraudEnabled = false;
+			std::cout << "Phong: " << (phongEnabled ? "ON" : "OFF") << std::endl;
+		}
 		// Camera Reset, just in case
 		else if (event.key.keysym.sym == SDLK_r){
 			cameraPos = glm::vec3(0.0f, 0.0f, 4.0f);
@@ -1080,10 +1297,37 @@ void handleEvent(SDL_Event event, DrawingWindow &window) {
 			orbitEnabled = false;
 			std::cout << "Camera reset to initial position and orientation, orbit disabled" << std::endl;
 		}
-
-		else if (event.key.keysym.sym == SDLK_t) {
-			std::cout << "\n=== TESTING RAY INTERSECTION ===" << std::endl;
-			testRayIntersection(window);
+		// Light Position Controls
+		// Use IJKL for horizontal/depth movement
+		else if(event.key.keysym.sym == SDLK_i) {
+			lightPos.z -= translationStep;  // Move light forward (away from camera)
+			std::cout << "Light Z: " << lightPos.z << std::endl;
+		}
+		else if(event.key.keysym.sym == SDLK_k) {
+			lightPos.z += translationStep;  // Move light backward (toward camera)
+			std::cout << "Light Z: " << lightPos.z << std::endl;
+		}
+		else if(event.key.keysym.sym == SDLK_j) {
+			lightPos.x -= translationStep;  // Move light left
+			std::cout << "Light X: " << lightPos.x << std::endl;
+		}
+		else if(event.key.keysym.sym == SDLK_l) {
+			lightPos.x += translationStep;  // Move light right
+			std::cout << "Light X: " << lightPos.x << std::endl;
+		}
+		// Use U/O for vertical movement
+		else if(event.key.keysym.sym == SDLK_y) {
+			lightPos.y += translationStep;  // Move light up
+			std::cout << "Light Y: " << lightPos.y << std::endl;
+		}
+		else if(event.key.keysym.sym == SDLK_u) {
+			lightPos.y -= translationStep;  // Move light down
+			std::cout << "Light Y: " << lightPos.y << std::endl;
+		}
+		// Quick reset to default position
+		else if(event.key.keysym.sym == SDLK_h) {
+			lightPos = glm::vec3(0.0f, 2.0f, 2.0f);
+			std::cout << "Light reset to default position" << std::endl;
 		}
 	} else if (event.type == SDL_MOUSEBUTTONDOWN) {
 		window.savePPM("output.ppm");
@@ -1165,7 +1409,8 @@ int main(int argc, char *argv[]) {
 	//drawRasterisedView(model, cameraPos, focalLength,imageScale, window);
 	// Week 5 Task 2 Test
 	palette = loadMaterials("../../../04 Wireframes and Rasterising/models/cornell-box.mtl");
-	model = loadObjModel("../../../04 Wireframes and Rasterising/models/cornell-box.obj",0.35, palette);
+	//model = loadObjModel("../../../04 Wireframes and Rasterising/models/cornell-box.obj",0.35, palette);
+	model = loadObjModel("../../../07 Lighting and Shading/resources/monkey.obj",1, palette);
 	// Test with identity matrix
 	glm::mat3 identity = glm::mat3(1.0f);
 	glm::vec3 testVec(1.0f, 2.0f, 3.0f);
